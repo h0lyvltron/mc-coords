@@ -4,8 +4,8 @@ import "core:fmt"
 import "core:mem"
 import "core:strings"
 import "core:strconv"
+import "core:os"
 import "conversion"
-import "assets/embedded"
 import rl "vendor:raylib"
 
 AppState :: struct {
@@ -52,6 +52,52 @@ DEFAULT_FONT_SETTINGS := FontSettings {
     title_size = 24.0,
 }
 
+load_font_with_fallback :: proc() -> rl.Font {
+    // Try common paths for Minecraft font
+    minecraft_paths := []string{
+        "assets/fonts/MinecraftTen-VGORe.ttf",
+        "./assets/fonts/MinecraftTen-VGORe.ttf",
+        "C:/Windows/Fonts/MinecraftTen-VGORe.ttf",
+    }
+
+    // Check user fonts directory
+    local_app_data := os.get_env("LOCALAPPDATA", context.temp_allocator)
+    if local_app_data != "" {
+        user_font_path := fmt.tprintf("%s/Microsoft/Windows/Fonts/MinecraftTen-VGORe.ttf", local_app_data)
+        if os.exists(user_font_path) {
+            font := rl.LoadFont(strings.clone_to_cstring(user_font_path))
+            if font.texture.id != 0 && rl.GetGlyphIndex(font, 'A') != 0 {
+                fmt.println("Loaded Minecraft font from:", user_font_path)
+                return font
+            }
+            rl.UnloadFont(font)
+        }
+    }
+
+    // Try to load Minecraft font from various paths
+    for path in minecraft_paths {
+        if os.exists(path) {
+            font := rl.LoadFont(strings.clone_to_cstring(path))
+            if font.texture.id != 0 && rl.GetGlyphIndex(font, 'A') != 0 {
+                fmt.println("Loaded Minecraft font from:", path)
+                return font
+            }
+            rl.UnloadFont(font)
+        }
+    }
+
+    // Fallback to Consolas
+    consolas := rl.LoadFont(strings.clone_to_cstring("C:/Windows/Fonts/consola.ttf"))
+    if consolas.texture.id != 0 && rl.GetGlyphIndex(consolas, 'A') != 0 {
+        fmt.println("Using Consolas as fallback font")
+        return consolas
+    }
+
+    // Final fallback to default raylib font
+    fmt.println("Using default raylib font")
+    return rl.GetFontDefault()
+}
+
 main :: proc() {
     // Initialize window
     rl.InitWindow(DEFAULT_WINDOW_FLAGS.width, DEFAULT_WINDOW_FLAGS.height, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title))
@@ -60,10 +106,9 @@ main :: proc() {
     // Set target FPS
     rl.SetTargetFPS(60)
 
-    // Initialize font settings
+    // Initialize font settings with improved font loading
     font_settings := DEFAULT_FONT_SETTINGS
-    font_data := embedded.MINECRAFT_FONT_DATA
-    font_settings.font = rl.LoadFontFromMemory(".ttf", raw_data(font_data), i32(len(font_data)), i32(font_settings.size), nil, 0)
+    font_settings.font = load_font_with_fallback()
     defer rl.UnloadFont(font_settings.font)
 
     // Constants for layout
