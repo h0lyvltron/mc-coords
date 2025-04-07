@@ -183,13 +183,3 @@ minecraft_coords/
 7. Path planning/waypoint system
 8. Map visualization
 9. Multi-language support
-
-## Development Guidelines
-1. Follow Odin idioms and best practices
-2. Maintain clean separation of concerns
-3. Use descriptive naming conventions
-4. Include error handling for all user inputs
-5. Document all public functions and types
-6. Write unit tests for conversion logic
-7. Keep UI responsive and user-friendly
-8. Prioritize intuitive user experience 
