@@ -5,6 +5,7 @@ import "core:mem"
 import "core:strings"
 import "core:strconv"
 import "conversion"
+import "assets/embedded"
 import rl "vendor:raylib"
 
 AppState :: struct {
@@ -61,7 +62,8 @@ main :: proc() {
 
     // Initialize font settings
     font_settings := DEFAULT_FONT_SETTINGS
-    font_settings.font = rl.LoadFont(strings.clone_to_cstring("assets/fonts/MinecraftTen-VGORe.ttf"))
+    font_data := embedded.MINECRAFT_FONT_DATA
+    font_settings.font = rl.LoadFontFromMemory(".ttf", raw_data(font_data), i32(len(font_data)), i32(font_settings.size), nil, 0)
     defer rl.UnloadFont(font_settings.font)
 
     // Constants for layout
