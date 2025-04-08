@@ -107,7 +107,67 @@ DEFAULT_KEY_CONFIG := KeyConfig{
     repeat_rate = 0.05,   // 50ms between repeats
 }
 
-// Update AppState to include key states
+// Image handling
+BackgroundImage :: struct {
+    texture: rl.Texture2D,
+    source_rect: rl.Rectangle,  // Region to sample from texture
+    dest_rect: rl.Rectangle,    // Region to draw to in window
+}
+
+// Calculate the optimal crop region for fitting an image while maintaining aspect ratio
+calculate_image_crop :: proc(image_width, image_height, target_width, target_height: i32) -> rl.Rectangle {
+    source_aspect := f32(image_width) / f32(image_height)
+    target_aspect := f32(target_width) / f32(target_height)
+    
+    // Initialize crop rectangle
+    crop := rl.Rectangle{}
+    
+    if source_aspect > target_aspect {
+        // Image is wider than target - crop width
+        crop.height = f32(image_height)
+        crop.width = crop.height * target_aspect
+        // Center horizontally
+        crop.x = f32(image_width - i32(crop.width)) / 2
+        crop.y = 0
+    } else {
+        // Image is taller than target - crop height
+        crop.width = f32(image_width)
+        crop.height = crop.width / target_aspect
+        // Center vertically
+        crop.x = 0
+        crop.y = f32(image_height - i32(crop.height)) / 2
+    }
+    
+    return crop
+}
+
+// Load and prepare background image
+load_background_image :: proc(path: string, window_width, window_height: i32) -> (BackgroundImage, bool) {
+    image := rl.LoadImage(strings.clone_to_cstring(path))
+    if image.data == nil {
+        fmt.eprintln("Failed to load image:", path)
+        return BackgroundImage{}, false
+    }
+    defer rl.UnloadImage(image)
+    
+    // Calculate optimal crop region
+    crop := calculate_image_crop(image.width, image.height, window_width, window_height)
+    
+    // Create texture from image
+    texture := rl.LoadTextureFromImage(image)
+    if texture.id == 0 {
+        fmt.eprintln("Failed to create texture from image:", path)
+        return BackgroundImage{}, false
+    }
+    
+    return BackgroundImage{
+        texture = texture,
+        source_rect = crop,
+        dest_rect = rl.Rectangle{0, 0, f32(window_width), f32(window_height)},
+    }, true
+}
+
+// Update AppState to include background image
 AppState :: struct {
     window_width: i32,
     window_height: i32,
@@ -118,8 +178,8 @@ AppState :: struct {
     coordinates: CoordinateState,
     help_visible: bool,
     should_clear: bool,
-    // Key state management
     key_states: map[rl.KeyboardKey]KeyState,
+    background: BackgroundImage,
 }
 
 WindowDefaultFlags :: struct {
@@ -345,11 +405,19 @@ init_app :: proc() -> AppState {
         key_states = make(map[rl.KeyboardKey]KeyState),
     }
     
-    // Initialize key states with default config
+    // Initialize key states
     state.key_states[.BACKSPACE] = init_key_state(DEFAULT_KEY_CONFIG)
     state.key_states[.LEFT] = init_key_state(DEFAULT_KEY_CONFIG)
     state.key_states[.RIGHT] = init_key_state(DEFAULT_KEY_CONFIG)
-    state.key_states[.TAB] = init_key_state(KeyConfig{initial_delay = 0.5, repeat_rate = 0.2}) // Slower repeat for tab
+    state.key_states[.TAB] = init_key_state(KeyConfig{initial_delay = 0.5, repeat_rate = 0.2})
+    
+    // Load background image
+    bg, ok := load_background_image("assets/tree-house.png", state.window_width, state.window_height)
+    if ok {
+        state.background = bg
+    } else {
+        fmt.eprintln("Failed to load background image")
+    }
     
     return state
 }
@@ -496,6 +564,30 @@ string_from_bytes :: proc(bytes: []u8) -> string {
     return string(bytes[:i])
 }
 
+// Helper function to draw text with outline
+draw_outlined_text :: proc(font: rl.Font, text: cstring, position: rl.Vector2, font_size: f32, spacing: f32, thickness: f32 = 1) {
+    // Draw outline (white)
+    offsets := [][2]f32{
+        {-thickness, -thickness},
+        {-thickness, 0},
+        {-thickness, thickness},
+        {0, -thickness},
+        {0, thickness},
+        {thickness, -thickness},
+        {thickness, 0},
+        {thickness, thickness},
+    }
+    
+    for offset in offsets {
+        pos := rl.Vector2{position.x + offset[0], position.y + offset[1]}
+        rl.DrawTextEx(font, text, pos, font_size, spacing, rl.WHITE)
+    }
+    
+    // Draw main text (black)
+    rl.DrawTextEx(font, text, position, font_size, spacing, rl.BLACK)
+}
+
+// Update main to clean up background texture
 main :: proc() {
     // Initialize window
     rl.InitWindow(DEFAULT_WINDOW_FLAGS.width, DEFAULT_WINDOW_FLAGS.height, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title))
@@ -508,6 +600,7 @@ main :: proc() {
     state := init_app()
     defer {
         rl.UnloadFont(state.font)
+        rl.UnloadTexture(state.background.texture)
         delete(state.key_states)
     }
     
@@ -518,7 +611,7 @@ main :: proc() {
     x_input := make_input_box(layout, Position{20, 140}, "X:", state.font, state.font_size, 1)
     z_input := make_input_box(layout, Position{20, 140 + layout.section_spacing}, "Z:", state.font, state.font_size, 1)
     overworld_button, nether_button := make_dimension_buttons(layout, Position{20, 140 + 2*layout.section_spacing + layout.spacing})
-    
+
     // Main loop
     for !rl.WindowShouldClose() {
         // Handle input
@@ -546,62 +639,77 @@ main :: proc() {
                 state.should_clear = false
             }
         }
-        
+
         // Draw
         rl.BeginDrawing()
         defer rl.EndDrawing()
-        
+
         rl.ClearBackground(rl.BLACK)
         
-        // Draw title
+        // Draw background image
+        rl.DrawTexturePro(
+            state.background.texture,
+            state.background.source_rect,
+            state.background.dest_rect,
+            rl.Vector2{0, 0},
+            0,
+            rl.WHITE,
+        )
+        
+        // Draw title with outline
         title_width := rl.MeasureTextEx(state.font, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title), state.font_size * 1.5, 1).x
         title_x := f32(state.window_width/2) - title_width/2
-        rl.DrawTextEx(state.font, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title), rl.Vector2{title_x, 30}, state.font_size * 1.5, 1, rl.WHITE)
+        draw_outlined_text(state.font, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title), rl.Vector2{title_x, 30}, state.font_size * 1.5, 1)
         
         // Draw input coordinates section
-        rl.DrawTextEx(state.font, strings.clone_to_cstring("INPUT COORDINATES:"), rl.Vector2{20, 95}, state.font_size, 1, rl.WHITE)
+        draw_outlined_text(state.font, "INPUT COORDINATES:", rl.Vector2{20, 95}, state.font_size, 1)
         
         // Draw X input
-        rl.DrawTextEx(state.font, strings.clone_to_cstring("X:"), rl.Vector2{x_input.label_pos.x, x_input.label_pos.y}, state.font_size, 1, rl.WHITE)
-        x_box_color := state.active_input == 0 ? rl.BLUE : rl.GRAY
+        draw_outlined_text(state.font, "X:", rl.Vector2{x_input.label_pos.x, x_input.label_pos.y}, state.font_size, 1)
+        x_box_color := rl.ColorAlpha(state.active_input == 0 ? rl.BLUE : rl.DARKGRAY, state.active_input == 0 ? 0.7 : 0.5)
         rl.DrawRectangleRec(x_input.rect, x_box_color)
-        rl.DrawTextEx(state.font, strings.clone_to_cstring(string(state.input_buffers[0][:])), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, state.font_size, 1, rl.WHITE)
+        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input_buffers[0][:])), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, state.font_size, 1)
         
         // Draw Z input
-        rl.DrawTextEx(state.font, strings.clone_to_cstring("Z:"), rl.Vector2{z_input.label_pos.x, z_input.label_pos.y}, state.font_size, 1, rl.WHITE)
-        z_box_color := state.active_input == 1 ? rl.BLUE : rl.GRAY
+        draw_outlined_text(state.font, "Z:", rl.Vector2{z_input.label_pos.x, z_input.label_pos.y}, state.font_size, 1)
+        z_box_color := rl.ColorAlpha(state.active_input == 1 ? rl.BLUE : rl.DARKGRAY, state.active_input == 1 ? 0.7 : 0.5)
         rl.DrawRectangleRec(z_input.rect, z_box_color)
-        rl.DrawTextEx(state.font, strings.clone_to_cstring(string(state.input_buffers[1][:])), rl.Vector2{z_input.text_pos.x, z_input.text_pos.y}, state.font_size, 1, rl.WHITE)
+        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input_buffers[1][:])), rl.Vector2{z_input.text_pos.x, z_input.text_pos.y}, state.font_size, 1)
         
         // Draw dimension selection
-        rl.DrawTextEx(state.font, strings.clone_to_cstring("STARTING DIMENSION:"), rl.Vector2{20, overworld_button.rect.y - layout.spacing}, state.font_size, 1, rl.WHITE)
+        draw_outlined_text(state.font, "STARTING DIMENSION:", rl.Vector2{20, overworld_button.rect.y - layout.spacing}, state.font_size, 1)
         
         // Draw Overworld button
-        overworld_color := state.coordinates.source.dimension == Dimension.Overworld ? rl.BLUE : rl.GRAY
+        overworld_color := rl.ColorAlpha(
+            state.coordinates.source.dimension == Dimension.Overworld ? rl.BLUE : rl.DARKGRAY,
+            0.7,
+        )
         if state.active_input == 2 && state.coordinates.source.dimension == Dimension.Overworld {
-            overworld_color = rl.SKYBLUE
+            overworld_color = rl.ColorAlpha(rl.SKYBLUE, 0.7)
         }
         rl.DrawRectangleRec(overworld_button.rect, overworld_color)
-        rl.DrawTextEx(state.font, strings.clone_to_cstring("OVERWORLD"), rl.Vector2{overworld_button.text_pos.x, overworld_button.text_pos.y}, state.font_size, 1, rl.WHITE)
+        draw_outlined_text(state.font, "OVERWORLD", rl.Vector2{overworld_button.text_pos.x, overworld_button.text_pos.y}, state.font_size, 1)
         
         // Draw Nether button
-        nether_color := state.coordinates.source.dimension == Dimension.Nether ? rl.BLUE : rl.GRAY
+        nether_color := rl.ColorAlpha(
+            state.coordinates.source.dimension == Dimension.Nether ? rl.BLUE : rl.DARKGRAY,
+            0.7,
+        )
         if state.active_input == 2 && state.coordinates.source.dimension == Dimension.Nether {
-            nether_color = rl.SKYBLUE
+            nether_color = rl.ColorAlpha(rl.SKYBLUE, 0.7)
         }
         rl.DrawRectangleRec(nether_button.rect, nether_color)
-        rl.DrawTextEx(state.font, strings.clone_to_cstring("NETHER"), rl.Vector2{nether_button.text_pos.x, nether_button.text_pos.y}, state.font_size, 1, rl.WHITE)
+        draw_outlined_text(state.font, "NETHER", rl.Vector2{nether_button.text_pos.x, nether_button.text_pos.y}, state.font_size, 1)
         
         // Draw converted coordinates
         converted := get_converted_coordinates(&state.coordinates)
         converted_text := coordinates_to_string(converted)
-        rl.DrawTextEx(
+        draw_outlined_text(
             state.font,
             strings.clone_to_cstring(converted_text),
-            rl.Vector2{DEFAULT_LAYOUT.margin, f32(state.window_height/2) + 50}, // Left-aligned at 20 pixels from left edge
+            rl.Vector2{DEFAULT_LAYOUT.margin, f32(state.window_height/2) + 50},
             state.font_size,
             1,
-            rl.WHITE,
         )
     }
 }
