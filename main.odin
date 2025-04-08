@@ -9,8 +9,8 @@ import "conversion"
 import rl "vendor:raylib"
 
 AppState :: struct {
-    input_x: [32]u8,
-    input_y: [32]u8,
+    input_x: [10]u8,  // 9 chars + null terminator
+    input_y: [10]u8,
     input_x_len: int,
     input_y_len: int,
     current_dimension: conversion.Dimension,
@@ -192,6 +192,40 @@ make_dimension_buttons :: proc(layout: Layout, pos: Position) -> (overworld: UIE
     return
 }
 
+convert_coordinates :: proc(state: ^AppState) {
+    // Handle null/empty values by defaulting to 0
+    input_x_str := string(state.input_x[:state.input_x_len])
+    input_y_str := string(state.input_y[:state.input_y_len])
+    
+    if input_x_str == "" || input_x_str == "-" {
+        input_x_str = "0"
+        state.input_x[0] = '0'
+        state.input_x_len = 1
+    }
+    if input_y_str == "" || input_y_str == "-" {
+        input_y_str = "0"
+        state.input_y[0] = '0'
+        state.input_y_len = 1
+    }
+
+    input_x, ok_x := strconv.parse_int(input_x_str)
+    input_y, ok_y := strconv.parse_int(input_y_str)
+    
+    if ok_x && ok_y {
+        target_dimension := state.current_dimension == conversion.Dimension.Overworld ? conversion.Dimension.Nether : conversion.Dimension.Overworld
+        state.converted_x = cast(i32)conversion.convert_between_dimensions(
+            input_x,
+            state.current_dimension,
+            target_dimension,
+        )
+        state.converted_y = cast(i32)conversion.convert_between_dimensions(
+            input_y,
+            state.current_dimension,
+            target_dimension,
+        )
+    }
+}
+
 main :: proc() {
     // Initialize window
     rl.InitWindow(DEFAULT_WINDOW_FLAGS.width, DEFAULT_WINDOW_FLAGS.height, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title))
@@ -216,8 +250,8 @@ main :: proc() {
     // Initialize app state
     state := AppState {
         current_dimension = conversion.Dimension.Overworld,
-        input_x = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        input_y = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        input_x = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        input_y = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
         input_x_len = 0,
         input_y_len = 0,
         active_input = 0,
@@ -234,6 +268,8 @@ main :: proc() {
         
         // Handle mouse input for text boxes
         if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
+            prev_active := state.active_input
+            
             if rl.CheckCollisionPointRec(mouse_pos, x_input.rect) {
                 state.active_input = 1
                 state.field_just_focused = true
@@ -243,11 +279,18 @@ main :: proc() {
             } else if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) {
                 state.current_dimension = conversion.Dimension.Overworld
                 state.active_input = 0
+                convert_coordinates(&state)
             } else if rl.CheckCollisionPointRec(mouse_pos, nether_button.rect) {
                 state.current_dimension = conversion.Dimension.Nether
                 state.active_input = 0
+                convert_coordinates(&state)
             } else {
                 state.active_input = 0
+            }
+
+            // If we clicked away from a field, update the conversion
+            if prev_active != 0 && state.active_input == 0 {
+                convert_coordinates(&state)
             }
         }
 
@@ -261,7 +304,7 @@ main :: proc() {
                         state.field_just_focused = false
                     }
                     if (key >= '0' && key <= '9') || (key == '-' && state.input_x_len == 0) {
-                        if state.input_x_len < 31 {
+                        if state.input_x_len < 9 {
                             state.input_x[state.input_x_len] = cast(u8)key
                             state.input_x_len += 1
                         }
@@ -272,7 +315,7 @@ main :: proc() {
                         state.field_just_focused = false
                     }
                     if (key >= '0' && key <= '9') || (key == '-' && state.input_y_len == 0) {
-                        if state.input_y_len < 31 {
+                        if state.input_y_len < 9 {
                             state.input_y[state.input_y_len] = cast(u8)key
                             state.input_y_len += 1
                         }
@@ -348,24 +391,7 @@ main :: proc() {
         }
 
         if rl.IsKeyPressed(rl.KeyboardKey.ENTER) {
-            target_dimension := state.current_dimension == conversion.Dimension.Overworld ? conversion.Dimension.Nether : conversion.Dimension.Overworld
-            input_x_str := string(state.input_x[:state.input_x_len])
-            input_y_str := string(state.input_y[:state.input_y_len])
-            input_x, ok_x := strconv.parse_int(input_x_str)
-            input_y, ok_y := strconv.parse_int(input_y_str)
-            
-            if ok_x && ok_y {
-                state.converted_x = cast(i32)conversion.convert_between_dimensions(
-                    input_x,
-                    state.current_dimension,
-                    target_dimension,
-                )
-                state.converted_y = cast(i32)conversion.convert_between_dimensions(
-                    input_y,
-                    state.current_dimension,
-                    target_dimension,
-                )
-            }
+            convert_coordinates(&state)
         }
 
         // Draw
