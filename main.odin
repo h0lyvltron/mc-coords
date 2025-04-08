@@ -751,10 +751,10 @@ main :: proc() {
     // Initialize window
     rl.InitWindow(DEFAULT_WINDOW_FLAGS.width, DEFAULT_WINDOW_FLAGS.height, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title))
     defer rl.CloseWindow()
-    
+
     // Set target FPS
     rl.SetTargetFPS(60)
-    
+
     // Initialize app state
     state := init_app()
     defer {
@@ -851,22 +851,22 @@ main :: proc() {
         
         // Draw Overworld button
         overworld_color := rl.ColorAlpha(
-            state.coordinates.source.dimension == Dimension.Overworld ? rl.BLUE : rl.DARKGRAY,
+            state.coordinates.source.dimension == Dimension.Overworld ? rl.SKYBLUE : rl.DARKGRAY,
             0.7,
         )
         if state.active_input == 2 && state.coordinates.source.dimension == Dimension.Overworld {
-            overworld_color = rl.ColorAlpha(rl.SKYBLUE, 0.7)
+            overworld_color = rl.ColorAlpha(rl.BLUE, 0.7)
         }
         rl.DrawRectangleRec(overworld_button.rect, overworld_color)
         draw_outlined_text(state.font, "OVERWORLD", rl.Vector2{overworld_button.text_pos.x, overworld_button.text_pos.y}, state.font_size, 1)
         
         // Draw Nether button
         nether_color := rl.ColorAlpha(
-            state.coordinates.source.dimension == Dimension.Nether ? rl.BLUE : rl.DARKGRAY,
+            state.coordinates.source.dimension == Dimension.Nether ? rl.SKYBLUE : rl.DARKGRAY,
             0.7,
         )
         if state.active_input == 2 && state.coordinates.source.dimension == Dimension.Nether {
-            nether_color = rl.ColorAlpha(rl.SKYBLUE, 0.7)
+            nether_color = rl.ColorAlpha(rl.BLUE, 0.7)
         }
         rl.DrawRectangleRec(nether_button.rect, nether_color)
         draw_outlined_text(state.font, "NETHER", rl.Vector2{nether_button.text_pos.x, nether_button.text_pos.y}, state.font_size, 1)
