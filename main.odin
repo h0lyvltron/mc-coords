@@ -107,41 +107,154 @@ DEFAULT_KEY_CONFIG := KeyConfig{
     repeat_rate = 0.05,   // 50ms between repeats
 }
 
-// Image handling
-BackgroundImage :: struct {
-    texture: rl.Texture2D,
-    source_rect: rl.Rectangle,  // Region to sample from texture
-    dest_rect: rl.Rectangle,    // Region to draw to in window
+// Background shader code
+BACKGROUND_VERTEX_SHADER :: `
+#version 330
+
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+in vec4 vertexColor;
+
+out vec2 fragTexCoord;
+out vec4 fragColor;
+
+uniform mat4 mvp;
+
+void main() {
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+    gl_Position = mvp * vec4(vertexPosition, 1.0);
+}
+`
+
+BACKGROUND_FRAGMENT_SHADER :: `
+#version 330
+
+in vec2 fragTexCoord;
+in vec4 fragColor;
+
+out vec4 finalColor;
+
+uniform sampler2D texture0;
+uniform float time;
+uniform vec2 resolution;
+
+// Cloud shadow parameters
+const float CLOUD_SPEED = 0.02;
+const float CLOUD_SCALE = 4.0;
+const float CLOUD_DENSITY = 0.4;
+const float CLOUD_LAYERS = 2.0;
+
+// Tree movement parameters
+const float TREE_SPEED = 2.0;
+const float TREE_AMPLITUDE = 0.004;
+const float TREE_WAVE_SCALE = 15.0;
+
+// Color masking parameters
+const vec3 TARGET_GREEN = vec3(0.2, 0.8, 0.2);
+const float COLOR_THRESHOLD = 0.35;
+const float MASK_SOFTNESS = 0.25;
+
+// Enhanced noise function for cloud shadows
+float noise(vec2 p) {
+    vec2 ip = floor(p);
+    vec2 u = fract(p);
+    u = u * u * (3.0 - 2.0 * u);
+    
+    float res = mix(
+        mix(sin(dot(ip, vec2(12.9898, 78.233))),
+            sin(dot(ip + vec2(1.0, 0.0), vec2(12.9898, 78.233))), u.x),
+        mix(sin(dot(ip + vec2(0.0, 1.0), vec2(12.9898, 78.233))),
+            sin(dot(ip + vec2(1.0, 1.0), vec2(12.9898, 78.233))), u.x),
+        u.y);
+    return 0.5 + 0.5 * res;
 }
 
-// Calculate the optimal crop region for fitting an image while maintaining aspect ratio
-calculate_image_crop :: proc(image_width, image_height, target_width, target_height: i32) -> rl.Rectangle {
-    source_aspect := f32(image_width) / f32(image_height)
-    target_aspect := f32(target_width) / f32(target_height)
+// Layered cloud shadows
+float cloudShadows(vec2 uv, float time) {
+    float shadow = 0.0;
+    float scale = CLOUD_SCALE;
+    float speed = CLOUD_SPEED;
+    float amplitude = 1.0;
     
-    // Initialize crop rectangle
-    crop := rl.Rectangle{}
-    
-    if source_aspect > target_aspect {
-        // Image is wider than target - crop width
-        crop.height = f32(image_height)
-        crop.width = crop.height * target_aspect
-        // Center horizontally
-        crop.x = f32(image_width - i32(crop.width)) / 2
-        crop.y = 0
-    } else {
-        // Image is taller than target - crop height
-        crop.width = f32(image_width)
-        crop.height = crop.width / target_aspect
-        // Center vertically
-        crop.x = 0
-        crop.y = f32(image_height - i32(crop.height)) / 2
+    // Add multiple layers of clouds
+    for(float i = 0.0; i < CLOUD_LAYERS; i++) {
+        // Offset each layer differently
+        vec2 offset = vec2(time * speed * (1.0 + i * 0.5), time * speed * 0.3 * (1.0 + i * 0.5));
+        shadow += noise((uv * scale + offset)) * amplitude;
+        
+        // Adjust parameters for next layer
+        scale *= 1.8;
+        speed *= 0.7;
+        amplitude *= 0.5;
     }
     
-    return crop
+    return shadow / CLOUD_LAYERS;
 }
 
-// Load and prepare background image
+// Calculate how "green" a color is
+float getGreenness(vec3 color) {
+    // Check if green is the dominant channel
+    bool isGreenDominant = color.g > color.r && color.g > color.b;
+    
+    // Calculate how close the color is to our target green
+    float greenDistance = length(color - TARGET_GREEN);
+    
+    // Create a soft mask based on the green distance
+    float mask = 1.0 - smoothstep(COLOR_THRESHOLD - MASK_SOFTNESS, 
+                                COLOR_THRESHOLD + MASK_SOFTNESS, 
+                                greenDistance);
+    
+    // Only return mask value if green is dominant
+    return isGreenDominant ? mask : 0.0;
+}
+
+void main() {
+    vec2 uv = fragTexCoord;
+    vec4 texColor = texture(texture0, uv);
+    
+    // Calculate green mask
+    float greenMask = getGreenness(texColor.rgb);
+    
+    // Enhanced tree movement
+    float treeInfluence = 1.0 - smoothstep(0.0, 0.6, uv.y);  // Increased vertical influence
+    float windWave = sin(time * TREE_SPEED + uv.y * TREE_WAVE_SCALE) * 
+                    cos(time * TREE_SPEED * 0.7 + uv.x * TREE_WAVE_SCALE * 0.5);
+    float movement = windWave * TREE_AMPLITUDE;
+    
+    // Apply movement based on green mask with enhanced effect
+    vec2 distortedUV = uv + vec2(movement * treeInfluence * (greenMask + 0.1), 
+                                movement * treeInfluence * greenMask * 0.2);  // Added slight vertical movement
+    
+    // Sample texture with distorted coordinates
+    texColor = texture(texture0, distortedUV);
+    
+    // Enhanced cloud shadows with multiple layers
+    float cloudShadow = cloudShadows(uv, time);
+    float shadowIntensity = mix(1.0, 0.75, cloudShadow * CLOUD_DENSITY);
+    
+    // Apply cloud shadows with varying effect based on green mask
+    float shadowEffect = mix(
+        mix(1.0, shadowIntensity, 0.3),  // Base shadow effect for non-green areas
+        mix(1.0, shadowIntensity, 1.0),  // Full shadow effect for green areas
+        greenMask
+    );
+    
+    finalColor = texColor * vec4(vec3(shadowEffect), 1.0) * fragColor;
+}
+`
+
+// Update BackgroundImage struct to include shader
+BackgroundImage :: struct {
+    texture: rl.Texture2D,
+    source_rect: rl.Rectangle,
+    dest_rect: rl.Rectangle,
+    shader: rl.Shader,
+    time_loc: i32,        // Uniform location for time
+    resolution_loc: i32,  // Uniform location for resolution
+}
+
+// Update load_background_image to include shader initialization
 load_background_image :: proc(path: string, window_width, window_height: i32) -> (BackgroundImage, bool) {
     image := rl.LoadImage(strings.clone_to_cstring(path))
     if image.data == nil {
@@ -160,10 +273,29 @@ load_background_image :: proc(path: string, window_width, window_height: i32) ->
         return BackgroundImage{}, false
     }
     
+    // Load shader
+    shader := rl.LoadShaderFromMemory(BACKGROUND_VERTEX_SHADER, BACKGROUND_FRAGMENT_SHADER)
+    if shader.id == 0 {
+        fmt.eprintln("Failed to load background shader")
+        rl.UnloadTexture(texture)
+        return BackgroundImage{}, false
+    }
+    
+    // Get uniform locations
+    time_loc := rl.GetShaderLocation(shader, "time")
+    resolution_loc := rl.GetShaderLocation(shader, "resolution")
+    
+    // Set initial resolution uniform
+    resolution := [2]f32{f32(window_width), f32(window_height)}
+    rl.SetShaderValue(shader, resolution_loc, &resolution, .VEC2)
+    
     return BackgroundImage{
         texture = texture,
         source_rect = crop,
         dest_rect = rl.Rectangle{0, 0, f32(window_width), f32(window_height)},
+        shader = shader,
+        time_loc = time_loc,
+        resolution_loc = resolution_loc,
     }, true
 }
 
@@ -587,7 +719,34 @@ draw_outlined_text :: proc(font: rl.Font, text: cstring, position: rl.Vector2, f
     rl.DrawTextEx(font, text, position, font_size, spacing, rl.BLACK)
 }
 
-// Update main to clean up background texture
+// Calculate the optimal crop region for fitting an image while maintaining aspect ratio
+calculate_image_crop :: proc(image_width, image_height, target_width, target_height: i32) -> rl.Rectangle {
+    source_aspect := f32(image_width) / f32(image_height)
+    target_aspect := f32(target_width) / f32(target_height)
+    
+    // Initialize crop rectangle
+    crop := rl.Rectangle{}
+    
+    if source_aspect > target_aspect {
+        // Image is wider than target - crop width
+        crop.height = f32(image_height)
+        crop.width = crop.height * target_aspect
+        // Center horizontally
+        crop.x = f32(image_width - i32(crop.width)) / 2
+        crop.y = 0
+    } else {
+        // Image is taller than target - crop height
+        crop.width = f32(image_width)
+        crop.height = crop.width / target_aspect
+        // Center vertically
+        crop.x = 0
+        crop.y = f32(image_height - i32(crop.height)) / 2
+    }
+    
+    return crop
+}
+
+// Update main drawing code to use shader
 main :: proc() {
     // Initialize window
     rl.InitWindow(DEFAULT_WINDOW_FLAGS.width, DEFAULT_WINDOW_FLAGS.height, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title))
@@ -601,6 +760,7 @@ main :: proc() {
     defer {
         rl.UnloadFont(state.font)
         rl.UnloadTexture(state.background.texture)
+        rl.UnloadShader(state.background.shader)
         delete(state.key_states)
     }
     
@@ -628,10 +788,15 @@ main :: proc() {
                 update_input_coordinates(&state)
                 state.active_input = 1
                 state.should_clear = true
-            } else if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) || rl.CheckCollisionPointRec(mouse_pos, nether_button.rect) {
+            } else if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) {
                 update_input_coordinates(&state)
                 state.active_input = 2
-                state.coordinates.source.dimension = state.coordinates.source.dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
+                state.coordinates.source.dimension = .Overworld
+                state.coordinates.needs_conversion = true
+            } else if rl.CheckCollisionPointRec(mouse_pos, nether_button.rect) {
+                update_input_coordinates(&state)
+                state.active_input = 2
+                state.coordinates.source.dimension = .Nether
                 state.coordinates.needs_conversion = true
             } else {
                 update_input_coordinates(&state)
@@ -640,13 +805,17 @@ main :: proc() {
             }
         }
 
-        // Draw
         rl.BeginDrawing()
         defer rl.EndDrawing()
 
         rl.ClearBackground(rl.BLACK)
         
-        // Draw background image
+        // Update shader uniforms
+        time := f32(rl.GetTime())
+        rl.SetShaderValue(state.background.shader, state.background.time_loc, &time, .FLOAT)
+        
+        // Begin shader mode and draw background
+        rl.BeginShaderMode(state.background.shader)
         rl.DrawTexturePro(
             state.background.texture,
             state.background.source_rect,
@@ -655,6 +824,7 @@ main :: proc() {
             0,
             rl.WHITE,
         )
+        rl.EndShaderMode()
         
         // Draw title with outline
         title_width := rl.MeasureTextEx(state.font, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title), state.font_size * 1.5, 1).x
