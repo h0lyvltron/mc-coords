@@ -37,8 +37,52 @@ FontSettings :: struct {
     title_size: f32,
 }
 
+Layout :: struct {
+    margin: f32,
+    spacing: f32,
+    section_spacing: f32,
+    input_box: struct {
+        width: f32,
+        height: f32,
+        text_padding: f32,
+    },
+    dimension_button: struct {
+        width: f32,
+        height: f32,
+        text_padding: f32,
+        gap: f32,
+    },
+}
+
+DEFAULT_LAYOUT := Layout {
+    margin = 20,
+    spacing = 35,
+    section_spacing = 45,
+    input_box = {
+        width = 200,
+        height = 32,
+        text_padding = 10,
+    },
+    dimension_button = {
+        width = 160,
+        height = 40,
+        text_padding = 10,
+        gap = 10,
+    },
+}
+
+Position :: struct {
+    x, y: f32,
+}
+
+UIElement :: struct {
+    rect: rl.Rectangle,
+    text_pos: Position,
+    label_pos: Position,
+}
+
 DEFAULT_WINDOW_FLAGS := WindowDefaultFlags {
-    title = "Minecraft Coordinate Converter",
+    title = "Minecraft Coordinate Manager",
     width = 480,
     height = 640,
     pos_x = 100,
@@ -48,7 +92,7 @@ DEFAULT_WINDOW_FLAGS := WindowDefaultFlags {
 DEFAULT_FONT_SETTINGS := FontSettings {
     font = rl.GetFontDefault(),
     size = 20.0,
-    spacing = 1.0,
+    spacing = 0.5,
     title_size = 24.0,
 }
 
@@ -98,6 +142,56 @@ load_font_with_fallback :: proc() -> rl.Font {
     return rl.GetFontDefault()
 }
 
+make_input_box :: proc(layout: Layout, pos: Position, label: string, font: rl.Font, font_size: f32, font_spacing: f32) -> UIElement {
+    label_width := rl.MeasureTextEx(font, strings.clone_to_cstring(label), font_size, font_spacing).x
+    return UIElement{
+        rect = rl.Rectangle{
+            pos.x + label_width + layout.margin,
+            pos.y,
+            layout.input_box.width,
+            layout.input_box.height,
+        },
+        text_pos = Position{
+            pos.x + label_width + layout.margin + layout.input_box.text_padding,
+            pos.y + layout.input_box.text_padding,
+        },
+        label_pos = Position{
+            pos.x,
+            pos.y + layout.input_box.text_padding,
+        },
+    }
+}
+
+make_dimension_buttons :: proc(layout: Layout, pos: Position) -> (overworld: UIElement, nether: UIElement) {
+    overworld = UIElement{
+        rect = rl.Rectangle{
+            pos.x,
+            pos.y,
+            layout.dimension_button.width,
+            layout.dimension_button.height,
+        },
+        text_pos = Position{
+            pos.x + layout.dimension_button.text_padding + 15,
+            pos.y + layout.dimension_button.text_padding,
+        },
+    }
+
+    nether = UIElement{
+        rect = rl.Rectangle{
+            pos.x + layout.dimension_button.width + layout.dimension_button.gap,
+            pos.y,
+            layout.dimension_button.width,
+            layout.dimension_button.height,
+        },
+        text_pos = Position{
+            pos.x + layout.dimension_button.width + layout.dimension_button.gap + layout.dimension_button.text_padding + 25,
+            pos.y + layout.dimension_button.text_padding,
+        },
+    }
+
+    return
+}
+
 main :: proc() {
     // Initialize window
     rl.InitWindow(DEFAULT_WINDOW_FLAGS.width, DEFAULT_WINDOW_FLAGS.height, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title))
@@ -111,9 +205,13 @@ main :: proc() {
     font_settings.font = load_font_with_fallback()
     defer rl.UnloadFont(font_settings.font)
 
-    // Constants for layout
-    y_offset_start: i32 = 30
-    spacing: i32 = 45
+    // Initialize layout
+    layout := DEFAULT_LAYOUT
+
+    // Initialize UI elements
+    x_input := make_input_box(layout, Position{20, 140}, "X:", font_settings.font, font_settings.size, font_settings.spacing)
+    y_input := make_input_box(layout, Position{20, 140 + layout.section_spacing}, "Y:", font_settings.font, font_settings.size, font_settings.spacing)
+    overworld_button, nether_button := make_dimension_buttons(layout, Position{20, 140 + 2*layout.section_spacing + layout.spacing})
 
     // Initialize app state
     state := AppState {
@@ -136,24 +234,19 @@ main :: proc() {
         
         // Handle mouse input for text boxes
         if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-            // Check X input box
-            if rl.CheckCollisionPointRec(mouse_pos, rl.Rectangle{50, f32(60 + spacing + 30), 200, 32}) {
+            if rl.CheckCollisionPointRec(mouse_pos, x_input.rect) {
                 state.active_input = 1
                 state.field_just_focused = true
-            } else if rl.CheckCollisionPointRec(mouse_pos, rl.Rectangle{50, f32(60 + 2*spacing + 30), 200, 32}) {
-                // Check Y input box
+            } else if rl.CheckCollisionPointRec(mouse_pos, y_input.rect) {
                 state.active_input = 2
                 state.field_just_focused = true
-            } else if rl.CheckCollisionPointRec(mouse_pos, rl.Rectangle{20, f32(60 + 3*spacing + 65), 160, 40}) {
-                // Check Overworld button
+            } else if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) {
                 state.current_dimension = conversion.Dimension.Overworld
                 state.active_input = 0
-            } else if rl.CheckCollisionPointRec(mouse_pos, rl.Rectangle{190, f32(60 + 3*spacing + 65), 160, 40}) {
-                // Check Nether button
+            } else if rl.CheckCollisionPointRec(mouse_pos, nether_button.rect) {
                 state.current_dimension = conversion.Dimension.Nether
                 state.active_input = 0
             } else {
-                // Clicked outside any input
                 state.active_input = 0
             }
         }
@@ -281,62 +374,55 @@ main :: proc() {
 
         rl.ClearBackground(rl.RAYWHITE)
 
-        y_offset := y_offset_start
-
         // Title - centered horizontally
         title_width := rl.MeasureTextEx(font_settings.font, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title), font_settings.title_size, font_settings.spacing).x
         title_x := f32(DEFAULT_WINDOW_FLAGS.width/2) - title_width/2
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title), rl.Vector2{title_x, f32(y_offset)}, font_settings.title_size, font_settings.spacing, rl.BLACK)
-        y_offset += spacing + 30
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title), rl.Vector2{title_x, 30}, font_settings.title_size, font_settings.spacing, rl.BLACK)
 
-        // Input coordinates
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("INPUT COORDINATES:"), rl.Vector2{20, f32(y_offset)}, font_settings.size, font_settings.spacing, rl.BLACK)
-        y_offset += 35
+        // Input coordinates section
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("INPUT COORDINATES:"), rl.Vector2{20, 95}, font_settings.size, font_settings.spacing, rl.BLACK)
 
         // X input
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("X:"), rl.Vector2{20, f32(y_offset + 6)}, font_settings.size, font_settings.spacing, rl.BLACK)
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("X:"), rl.Vector2{x_input.label_pos.x, x_input.label_pos.y}, font_settings.size, font_settings.spacing, rl.BLACK)
         x_box_color := state.active_input == 1 ? rl.BLUE : rl.LIGHTGRAY
-        rl.DrawRectangle(50, y_offset, 200, 32, x_box_color)
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(string(state.input_x[:state.input_x_len])), rl.Vector2{60, f32(y_offset + 6)}, font_settings.size, font_settings.spacing, rl.BLACK)
-        y_offset += spacing
+        rl.DrawRectangleRec(x_input.rect, x_box_color)
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(string(state.input_x[:state.input_x_len])), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, font_settings.size, font_settings.spacing, rl.BLACK)
 
         // Y input
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("Y:"), rl.Vector2{20, f32(y_offset + 6)}, font_settings.size, font_settings.spacing, rl.BLACK)
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("Y:"), rl.Vector2{y_input.label_pos.x, y_input.label_pos.y}, font_settings.size, font_settings.spacing, rl.BLACK)
         y_box_color := state.active_input == 2 ? rl.BLUE : rl.LIGHTGRAY
-        rl.DrawRectangle(50, y_offset, 200, 32, y_box_color)
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(string(state.input_y[:state.input_y_len])), rl.Vector2{60, f32(y_offset + 6)}, font_settings.size, font_settings.spacing, rl.BLACK)
-        y_offset += spacing
+        rl.DrawRectangleRec(y_input.rect, y_box_color)
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(string(state.input_y[:state.input_y_len])), rl.Vector2{y_input.text_pos.x, y_input.text_pos.y}, font_settings.size, font_settings.spacing, rl.BLACK)
 
         // Dimension selection
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("STARTING DIMENSION:"), rl.Vector2{20, f32(y_offset)}, font_settings.size, font_settings.spacing, rl.BLACK)
-        y_offset += 35
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("STARTING DIMENSION:"), rl.Vector2{20, overworld_button.rect.y - layout.spacing}, font_settings.size, font_settings.spacing, rl.BLACK)
 
-        overworld_rect := rl.Rectangle{20, f32(y_offset), 160, 40}
+        // Overworld button
         overworld_color := state.current_dimension == conversion.Dimension.Overworld ? rl.BLUE : rl.GRAY
         if state.active_input == 3 {
             overworld_color = state.current_dimension == conversion.Dimension.Overworld ? rl.BLUE : rl.LIGHTGRAY
         }
-        rl.DrawRectangleRec(overworld_rect, overworld_color)
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("OVERWORLD"), rl.Vector2{45, f32(y_offset + 10)}, font_settings.size, font_settings.spacing, rl.WHITE)
+        rl.DrawRectangleRec(overworld_button.rect, overworld_color)
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("OVERWORLD"), rl.Vector2{overworld_button.text_pos.x, overworld_button.text_pos.y}, font_settings.size, font_settings.spacing, rl.WHITE)
 
-        nether_rect := rl.Rectangle{190, f32(y_offset), 160, 40}
+        // Nether button
         nether_color := state.current_dimension == conversion.Dimension.Nether ? rl.BLUE : rl.GRAY
         if state.active_input == 3 {
             nether_color = state.current_dimension == conversion.Dimension.Nether ? rl.BLUE : rl.LIGHTGRAY
         }
-        rl.DrawRectangleRec(nether_rect, nether_color)
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("NETHER"), rl.Vector2{235, f32(y_offset + 10)}, font_settings.size, font_settings.spacing, rl.WHITE)
-        y_offset += spacing + 10
+        rl.DrawRectangleRec(nether_button.rect, nether_color)
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("NETHER"), rl.Vector2{nether_button.text_pos.x, nether_button.text_pos.y}, font_settings.size, font_settings.spacing, rl.WHITE)
 
-        // Converted coordinates
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("CONVERTED COORDINATES:"), rl.Vector2{20, f32(y_offset)}, font_settings.size, font_settings.spacing, rl.BLACK)
-        y_offset += 35
+        // Converted coordinates section
+        converted_y := overworld_button.rect.y + layout.dimension_button.height + layout.section_spacing
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring("CONVERTED COORDINATES:"), rl.Vector2{20, converted_y}, font_settings.size, font_settings.spacing, rl.BLACK)
+        converted_y += layout.spacing
 
         target_dimension := state.current_dimension == conversion.Dimension.Overworld ? conversion.Dimension.Nether : conversion.Dimension.Overworld
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(fmt.tprintf("X: %d", state.converted_x)), rl.Vector2{20, f32(y_offset)}, font_settings.size, font_settings.spacing, rl.BLACK)
-        y_offset += 35
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(fmt.tprintf("Y: %d", state.converted_y)), rl.Vector2{20, f32(y_offset)}, font_settings.size, font_settings.spacing, rl.BLACK)
-        y_offset += 35
-        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(fmt.tprintf("TARGET DIMENSION: %v", target_dimension)), rl.Vector2{20, f32(y_offset)}, font_settings.size, font_settings.spacing, rl.BLACK)
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(fmt.tprintf("X: %d", state.converted_x)), rl.Vector2{20, converted_y}, font_settings.size, font_settings.spacing, rl.BLACK)
+        converted_y += layout.spacing
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(fmt.tprintf("Y: %d", state.converted_y)), rl.Vector2{20, converted_y}, font_settings.size, font_settings.spacing, rl.BLACK)
+        converted_y += layout.spacing
+        rl.DrawTextEx(font_settings.font, strings.clone_to_cstring(fmt.tprintf("TARGET DIMENSION: %v", target_dimension)), rl.Vector2{20, converted_y}, font_settings.size, font_settings.spacing, rl.BLACK)
     }
 }

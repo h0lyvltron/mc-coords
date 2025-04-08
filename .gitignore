@@ -18,3 +18,7 @@
 # OS specific
 .DS_Store
 Thumbs.db 
+
+# Font files
+*.ttf
+*.otf
