@@ -6,7 +6,7 @@ A GUI application built with Odin to manage and convert Minecraft coordinates be
 ## Technical Stack
 - **Language**: Odin
 - **GUI Framework**: [raylib](https://www.raylib.com/)
-- **Font**: Consolas (system monospace font)
+- **Font**: [Minecraft Ten by NubeFonts](https://www.fontspace.com/minecraft-ten-font-f40317)
 - **Persistence**: Planned JSON file for storing saved locations
 
 ## Core Features
