@@ -178,4 +178,196 @@ mc-coords/
 - Consider backward compatibility
 - Document all new systems
 - Add proper error handling
-- Consider user feedback mechanisms 
+- Consider user feedback mechanisms
+
+# System Design
+
+## Current State
+- Coordinate conversion between Overworld/Nether
+- Input validation and null handling
+- Font system with fallback chain
+- Basic layout management using structs
+
+## Data Structure Consolidations
+
+### 1. Coordinate System
+```odin
+CoordinatePair :: struct {
+    x, y: int,
+    dimension: conversion.Dimension,
+}
+
+CoordinateState :: struct {
+    source: CoordinatePair,
+    converted: CoordinatePair,
+    needs_conversion: bool,  // Indicates if conversion needs to be recalculated
+}
+
+// Conversion interface
+convert_coordinate_pair :: proc(pair: CoordinatePair) -> CoordinatePair {
+    target_dimension := pair.dimension == conversion.Dimension.Overworld ? conversion.Dimension.Nether : conversion.Dimension.Overworld
+    return CoordinatePair {
+        x = conversion.convert_between_dimensions(pair.x, pair.dimension, target_dimension),
+        y = conversion.convert_between_dimensions(pair.y, pair.dimension, target_dimension),
+        dimension = target_dimension,
+    }
+}
+
+// Integration with AppState
+AppState :: struct {
+    coordinates: CoordinateState,
+    // ... other fields
+}
+```
+
+### 2. Input System
+```odin
+InputBuffer :: struct {
+    buffer: [10]u8,
+    length: int,
+    is_active: bool,
+    cursor_pos: int,
+    selection_start: int,
+    selection_end: int,
+}
+
+InputState :: struct {
+    x: InputBuffer,
+    y: InputBuffer,
+    dimension: conversion.Dimension,
+    backspace_held_time: f32,
+    delete_held_time: f32,
+}
+
+// Integration with AppState
+AppState :: struct {
+    input: InputState,
+    // ... other fields
+}
+```
+
+### 3. UI Element System
+```odin
+UIElementState :: struct {
+    element: UIElement,
+    is_active: bool,
+    is_hovered: bool,
+    color: rl.Color,
+    active_color: rl.Color,
+    hover_color: rl.Color,
+    text_color: rl.Color,
+}
+
+UIState :: struct {
+    elements: map[UIElement_ID]UIElementState,
+    active_element: UIElement_ID,
+    previous_element: UIElement_ID,
+    modal_state: Modal_State,
+}
+
+// Integration with AppState
+AppState :: struct {
+    ui: UIState,
+    // ... other fields
+}
+```
+
+### 4. Layout System
+```odin
+LayoutCalculator :: struct {
+    layout: Layout,
+    current_pos: Position,
+    section_stack: [dynamic]Position,
+}
+
+LayoutManager :: struct {
+    calculator: LayoutCalculator,
+    elements: map[UIElement_ID]UIElement,
+    default_spacing: f32,
+    default_margin: f32,
+}
+
+// Integration with AppState
+AppState :: struct {
+    layout: LayoutManager,
+    // ... other fields
+}
+```
+
+## Integration Points
+
+### 1. Coordinate Updates
+- Triggered by:
+  - Input field changes
+  - Dimension changes
+  - Manual conversion requests
+- Updates:
+  - Source coordinates
+  - Converted coordinates (only when needs_conversion is true)
+  - UI display
+- State Management:
+  - Sets needs_conversion when source changes
+  - Clears needs_conversion after conversion
+  - Prevents unnecessary recalculations
+
+### 2. Input Handling
+- Processes:
+  - Text input
+  - Navigation
+  - Special keys
+- Updates:
+  - Input buffers
+  - Cursor positions
+  - Selections
+  - Coordinate state
+
+### 3. UI Updates
+- Handles:
+  - Element states
+  - Focus changes
+  - Modal displays
+  - Color updates
+- Updates:
+  - Visual feedback
+  - Input focus
+  - Modal visibility
+
+### 4. Layout Management
+- Manages:
+  - Element positions
+  - Spacing
+  - Margins
+  - Section organization
+- Updates:
+  - Element rectangles
+  - Text positions
+  - Visual hierarchy
+
+## Implementation Order
+
+1. Coordinate System
+   - Implement CoordinatePair
+   - Add conversion logic
+   - Update AppState integration
+
+2. Input System
+   - Create InputBuffer
+   - Implement input handling
+   - Add state management
+
+3. UI System
+   - Build UIElementState
+   - Implement state updates
+   - Add visual feedback
+
+4. Layout System
+   - Create LayoutCalculator
+   - Implement position management
+   - Add section handling
+
+## Notes
+- Each system maintains its own state
+- Clear interfaces between systems
+- Minimal coupling between components
+- Easy to extend and modify
+- Performance considerations for frequent updates 

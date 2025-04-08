@@ -126,7 +126,7 @@ LocationDatabase :: struct {
 2. Implement coordinate conversion logic
 3. Create basic raylib window and input handling
 
-#### Phase 2: UI Implementation (Completed)
+#### Phase 2: UI Implementation (In Progress)
 1. Design and implement the main window layout
 2. Add coordinate input fields and conversion display
 3. Implement dimension toggle
@@ -137,11 +137,8 @@ LocationDatabase :: struct {
 2. Add location saving/loading functionality
 3. Create location list view
 4. Implement search/filter functionality
+5. Data serialization/deserialization
 
-#### Phase 4: Data Persistence (Planned)
-1. Implement JSON serialization/deserialization
-2. Add file I/O for saving/loading location database
-3. Add auto-save functionality
 
 #### Phase 5: Polish (Planned)
 1. Add error handling
@@ -161,7 +158,7 @@ minecraft_coords/
 │   ├── ui/
 │   │   ├── main_window.odin
 │   │   ├── location_list.odin (planned)
-│   │   └── input_fields.odin
+│   │   └── input_fields.odin (planned)
 │   ├── data/
 │   │   ├── location.odin (planned)
 │   │   └── persistence.odin (planned)
@@ -174,12 +171,6 @@ minecraft_coords/
 ```
 
 ## Future Enhancements
-1. Add support for Y-axis (vertical) coordinates
-2. Integration with Minecraft server API
-3. Import/Export functionality
-4. Multiple location databases
-5. Location categories/folders
-6. Distance calculation between points
-7. Path planning/waypoint system
-8. Map visualization
-9. Multi-language support
+1. Import/Export functionality
+2. Location categories/folders
+3. Distance calculation between points
