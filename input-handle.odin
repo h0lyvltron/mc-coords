@@ -168,6 +168,11 @@ handle_numeric_input :: proc(state: ^InputState, key: rune) -> bool {
                 i += 1
             }
             
+            // Check if we've reached the character limit (9 chars)
+            if i >= 9 {
+                return false
+            }
+            
             if i < len(buffer) - 1 { // Leave room for null terminator
                 // Clear buffer on first character after focusing if needed
                 if state.should_clear {
@@ -262,7 +267,10 @@ update_input_state :: proc(state: ^InputState) -> bool {
     // Handle character input
     key := rl.GetCharPressed()
     if key != 0 {
-        handle_numeric_input(state, key)
+        if handle_numeric_input(state, key) {
+            // Trigger coordinate update on successful numeric input
+            return true
+        }
     }
     
     return false
