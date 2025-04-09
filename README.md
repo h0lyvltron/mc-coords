@@ -12,7 +12,7 @@ A GUI tool for converting Minecraft coordinates between the Overworld and Nether
 - **Input**: Type coordinates in X/Z fields
 - **Navigation**: Tab/Shift+Tab or mouse click
 - **Dimension Toggle**: Arrow keys (left/right) or mouse click
-- **Clear Input**: Click field and press Backspace
+- **Clear Input**: Type on field, press Backspace
 
 ## Technical Details
 - Language: Odin
