@@ -1,373 +1,113 @@
-# Minecraft Coordinate Manager - Refactoring Context
+# Minecraft Coordinate Converter - Development Context
 
-## Current State
-The application currently provides basic coordinate conversion between Minecraft dimensions with a simple UI. Core functionality includes:
-- Input fields for X/Y coordinates
-- Dimension selection (Overworld/Nether)
-- Automatic conversion
-- Layout management
+## Current Implementation
 
-## Planned Refactoring
+### Core Systems
+- Basic coordinate conversion between Overworld and Nether dimensions
+- Input validation for coordinate values
+- Font loading with fallback mechanism
+- Layout management for UI elements
+- Input system separated into dedicated module
+- Debug mode for troubleshooting
 
-### 1. Input Management System
-```odin
-InputAction :: enum {
-    Confirm,           // Enter - Confirm input/conversion
-    FocusNext,        // Tab - Move to next field
-    FocusPrevious,    // Shift+Tab - Move to previous field
-    SelectAll,        // Ctrl+A - Select all text in active field
-    DimensionToggle,  // Space - Toggle between dimensions
-    DimensionNext,    // Right Arrow - Next dimension
-    DimensionPrev,    // Left Arrow - Previous dimension
-    ClearField,       // Escape - Clear current field
-    OpenSettings,     // Ctrl+S - Open settings
-    ToggleHelp,       // F1 - Toggle help overlay
-    CopyDestination,  // Ctrl+C - copies destination coordinates to clipboard
-}
-```
+### Input System (input-handle.odin)
+- Structured input handling with `InputBox` enum for different input types
+- Key state management with repeat functionality
+- Mouse input handling
+- Tab navigation between input elements
+- Dimension toggle via keyboard and mouse
+- Input buffer management for coordinate values
+- Debug logging for input processing
 
-#### Features
-- Centralized input handling
-- Configurable keybindings
-- Support for modifier keys (Shift, Ctrl, Alt)
-- Alternative key bindings
-- Input action descriptions for help display
+### UI Elements
+- X and Z coordinate input boxes
+- Dimension selection buttons (Overworld/Nether)
+- Title and section headers with outline effects
+- Converted coordinate display
 
-#### Implementation Notes
-- Store bindings in a map[InputAction]InputBinding
-- Support for both primary and secondary key bindings
-- Handle modifier key states
-- Provide easy-to-use interface for checking actions
-- Consider gamepad/controller support for future
+### Debug System
+- Debug mode toggle for detailed logging
+- Input buffer inspection
+- Coordinate conversion tracking
+- State transition logging
+- Performance monitoring
+- Error condition reporting
 
-### 2. UI State Management
+## Systems to Implement
 
-#### Components
-- Active element tracking
-- Focus management
-- Modal states (settings, help overlay)
-- Input field state
-- Conversion state
+### Input Management
+- [x] Input state tracking
+- [x] Key binding system
+- [x] Mouse input handling
+- [ ] Debug logging
+- [ ] Input validation feedback
+- [ ] Custom key binding support
 
-#### Planned Structs
-```odin
-UIState :: struct {
-    active_element: UIElement_ID,
-    previous_element: UIElement_ID,
-    keybind_ui: KeybindUI,
-    show_help: bool,
-}
+### UI State
+- [x] Active element tracking
+- [x] Focus management
+- [ ] Debug mode UI
+- [ ] Modal dialog system
+- [ ] Animation system
+- [ ] Theme support
 
-UIElement_ID :: enum {
-    None,
-    Input_X,
-    Input_Y,
-    Button_Overworld,
-    Button_Nether,
-    Button_Settings,
-}
-```
+### Settings
+- [x] Basic settings structure
+- [ ] Debug mode configuration
+- [ ] Theme configuration
+- [ ] Font size adjustment
+- [ ] Auto-save preferences
+- [ ] Default dimension setting
 
-### 3. Settings System
+### Location Management
+- [ ] Location database
+- [ ] Save/load functionality
+- [ ] Location labeling
+- [ ] Filtering system
+- [ ] Import/export
 
-#### Features
-- Keybinding configuration
-- UI preferences
-- Font settings
-- Layout customization
-- Save/Load functionality
-
-#### Data Structure
-```odin
-Settings :: struct {
-    input: InputManager,
-    ui: struct {
-        font_size: f32,
-        spacing: f32,
-        show_tooltips: bool,
-    },
-}
-```
-
-### 4. File Organization
-
-#### Planned Structure
+## File Structure
 ```
 mc-coords/
-├── src/
-│   ├── main.odin           # Application entry point
-│   ├── input.odin          # Input management
-│   ├── ui_state.odin       # UI state management
-│   ├── settings.odin       # Settings and configuration
-│   ├── keybind_ui.odin     # Keybinding UI
-│   ├── layout.odin         # Layout management
-│   └── conversion/         # Coordinate conversion logic
-├── assets/
-│   └── fonts/             # Font files
-└── config/                # User settings and keybinds
+├── main.odin           # Main application entry point
+├── input-handle.odin   # Input system implementation
+├── modes.odin          # Modal state management
+├── location-manager.odin # Location management system
+├── shader.odin         # Shader management
+├── assets/             # Resource files
+│   └── tree-house.png  # Background image
+└── vendor/             # External dependencies
+    └── raylib/         # Graphics library
 ```
-
-### 5. New Features to Implement
-
-#### Phase 1: Core Systems
-1. Input Management
-   - Basic action mapping
-   - Modifier key support
-   - Action checking interface
-
-2. Settings Framework
-   - Basic settings storage
-   - Save/load functionality
-   - Default configuration
-
-#### Phase 2: UI Improvements
-1. Help System
-   - Keybind display
-   - Usage instructions
-   - Tooltips
-
-2. Settings UI
-   - Keybind configuration
-   - UI customization
-   - Font selection
-
-#### Phase 3: Enhanced Functionality
-1. Coordinate Management
-   - Multiple coordinate sets
-   - Coordinate history
-   - Import/Export
-
-2. Quality of Life
-   - Copy to clipboard
-   - Paste coordinates
-   - Quick actions
-
-
-### 6. Future Considerations
-
-- Localization support
-- Theme system
-- Plugin architecture
-- Additional dimension support
-- Coordinate set management
-- Network features (multiplayer coordination)
-- Backup/restore settings
-
-## Implementation Priority
-
-1. Input Management System
-   - Essential for all other improvements
-   - Enables better user interaction
-
-2. Settings System
-   - Required for storing keybinds
-   - Enables user customization
-
-3. UI State Management
-   - Improves code organization
-   - Enables new features
-
-4. Help System
-   - Makes new features discoverable
-   - Improves user experience
-
-## Notes
-
-- Keep existing functionality working during refactor
-- Maintain current performance
-- Consider backward compatibility
-- Document all new systems
-- Add proper error handling
-- Consider user feedback mechanisms
-
-# System Design
-
-## Current State
-- Coordinate conversion between Overworld/Nether
-- Input validation and null handling
-- Font system with fallback chain
-- Basic layout management using structs
-
-## Data Structure Consolidations
-
-### 1. Coordinate System
-```odin
-CoordinatePair :: struct {
-    x, y: int,
-    dimension: conversion.Dimension,
-}
-
-CoordinateState :: struct {
-    source: CoordinatePair,
-    converted: CoordinatePair,
-    needs_conversion: bool,  // Indicates if conversion needs to be recalculated
-}
-
-// Conversion interface
-convert_coordinate_pair :: proc(pair: CoordinatePair) -> CoordinatePair {
-    target_dimension := pair.dimension == conversion.Dimension.Overworld ? conversion.Dimension.Nether : conversion.Dimension.Overworld
-    return CoordinatePair {
-        x = conversion.convert_between_dimensions(pair.x, pair.dimension, target_dimension),
-        y = conversion.convert_between_dimensions(pair.y, pair.dimension, target_dimension),
-        dimension = target_dimension,
-    }
-}
-
-// Integration with AppState
-AppState :: struct {
-    coordinates: CoordinateState,
-    // ... other fields
-}
-```
-
-### 2. Input System
-```odin
-InputBuffer :: struct {
-    buffer: [10]u8,
-    length: int,
-    is_active: bool,
-    cursor_pos: int,
-    selection_start: int,
-    selection_end: int,
-}
-
-InputState :: struct {
-    x: InputBuffer,
-    y: InputBuffer,
-    dimension: conversion.Dimension,
-    backspace_held_time: f32,
-    delete_held_time: f32,
-}
-
-// Integration with AppState
-AppState :: struct {
-    input: InputState,
-    // ... other fields
-}
-```
-
-### 3. UI Element System
-```odin
-UIElementState :: struct {
-    element: UIElement,
-    is_active: bool,
-    is_hovered: bool,
-    color: rl.Color,
-    active_color: rl.Color,
-    hover_color: rl.Color,
-    text_color: rl.Color,
-}
-
-UIState :: struct {
-    elements: map[UIElement_ID]UIElementState,
-    active_element: UIElement_ID,
-    previous_element: UIElement_ID,
-    modal_state: Modal_State,
-}
-
-// Integration with AppState
-AppState :: struct {
-    ui: UIState,
-    // ... other fields
-}
-```
-
-### 4. Layout System
-```odin
-LayoutCalculator :: struct {
-    layout: Layout,
-    current_pos: Position,
-    section_stack: [dynamic]Position,
-}
-
-LayoutManager :: struct {
-    calculator: LayoutCalculator,
-    elements: map[UIElement_ID]UIElement,
-    default_spacing: f32,
-    default_margin: f32,
-}
-
-// Integration with AppState
-AppState :: struct {
-    layout: LayoutManager,
-    // ... other fields
-}
-```
-
-## Integration Points
-
-### 1. Coordinate Updates
-- Triggered by:
-  - Input field changes
-  - Dimension changes
-  - Manual conversion requests
-- Updates:
-  - Source coordinates
-  - Converted coordinates (only when needs_conversion is true)
-  - UI display
-- State Management:
-  - Sets needs_conversion when source changes
-  - Clears needs_conversion after conversion
-  - Prevents unnecessary recalculations
-
-### 2. Input Handling
-- Processes:
-  - Text input
-  - Navigation
-  - Special keys
-- Updates:
-  - Input buffers
-  - Cursor positions
-  - Selections
-  - Coordinate state
-
-### 3. UI Updates
-- Handles:
-  - Element states
-  - Focus changes
-  - Modal displays
-  - Color updates
-- Updates:
-  - Visual feedback
-  - Input focus
-  - Modal visibility
-
-### 4. Layout Management
-- Manages:
-  - Element positions
-  - Spacing
-  - Margins
-  - Section organization
-- Updates:
-  - Element rectangles
-  - Text positions
-  - Visual hierarchy
 
 ## Implementation Order
+1. [x] Input system separation and refinement
+2. [ ] Debug system implementation
+3. [ ] Settings system implementation
+4. [ ] UI state management
+5. [ ] Location management
+6. [ ] Additional features
 
-1. Coordinate System
-   - Implement CoordinatePair
-   - Add conversion logic
-   - Update AppState integration
-
-2. Input System
-   - Create InputBuffer
-   - Implement input handling
-   - Add state management
-
-3. UI System
-   - Build UIElementState
-   - Implement state updates
-   - Add visual feedback
-
-4. Layout System
-   - Create LayoutCalculator
-   - Implement position management
-   - Add section handling
+## Debugging Best Practices
+1. Implement debug mode early in development
+2. Use structured logging for state transitions
+3. Track input processing with detailed logs
+4. Monitor coordinate conversion steps
+5. Log error conditions and edge cases
+6. Use debug mode to verify state changes
+7. Document common debugging patterns
+8. Keep debug logs clean and focused
+9. Use debug mode to validate assumptions
+10. Maintain debug mode in production for troubleshooting
 
 ## Notes
-- Each system maintains its own state
-- Clear interfaces between systems
-- Minimal coupling between components
-- Easy to extend and modify
-- Performance considerations for frequent updates 
+- Input system successfully separated into dedicated module
+- Coordinate conversion working with proper input validation
+- UI elements properly integrated with input system
+- Debug mode implemented for troubleshooting, needs more work
+- Focus on maintaining clean separation of concerns
+- Future enhancements planned for settings and location management
+- Testing systems in isolation before integration
+- Documenting function signatures and data flow
+- Considering performance implications of input handling
+- Debug mode essential for maintaining system reliability and troubleshooting bugs efficiently

@@ -15,13 +15,14 @@ Dimension :: enum {
 }
 
 CoordinatePair :: struct {
-    x, y: int,
+    x, z: int,
     dimension: Dimension,
 }
 
 CoordinateState :: struct {
     source: CoordinatePair,
     converted: CoordinatePair,
+    source_dimension: Dimension,
     needs_conversion: bool,
 }
 
@@ -30,23 +31,24 @@ init_coordinate_state :: proc() -> CoordinateState {
     return CoordinateState {
         source = CoordinatePair{0, 0, Dimension.Overworld},
         converted = CoordinatePair{0, 0, Dimension.Nether},
+        source_dimension = Dimension.Overworld,
         needs_conversion = true,
     }
 }
 
 // Update source coordinates and mark for conversion if changed
-update_coordinates :: proc(state: ^CoordinateState, x: int, y: int) {
-    if x != state.source.x || y != state.source.y {
+update_coordinates :: proc(state: ^CoordinateState, x: int, z: int) {
+    if x != state.source.x || z != state.source.z {
         state.source.x = x
-        state.source.y = y
+        state.source.z = z
         state.needs_conversion = true
     }
 }
 
 // Update dimension and mark for conversion if changed
 update_dimension :: proc(state: ^CoordinateState, dimension: Dimension) {
-    if dimension != state.source.dimension {
-        state.source.dimension = dimension
+    if dimension != state.source_dimension {
+        state.source_dimension = dimension
         state.needs_conversion = true
     }
 }
@@ -67,44 +69,42 @@ convert_between_dimensions :: proc(x: int, from: Dimension, to: Dimension) -> in
     if from == to {
         return x
     }
-    return convert_coordinate_value(x, from)
+    switch from {
+    case .Overworld:
+        return x / 8
+    case .Nether:
+        return x * 8
+    }
+    return x
 }
 
-// Get converted coordinates, performing conversion if needed
-get_converted_coordinates :: proc(state: ^CoordinateState) -> CoordinatePair {
-    if state.needs_conversion {
-        target_dimension := state.source.dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
-        state.converted = CoordinatePair {
-            x = convert_between_dimensions(state.source.x, state.source.dimension, target_dimension),
-            y = convert_between_dimensions(state.source.y, state.source.dimension, target_dimension),
-            dimension = target_dimension,
-        }
-        state.needs_conversion = false
+// Get converted coordinates
+get_converted_coordinates :: proc(coords: ^CoordinateState) -> (converted: bool) {
+    if coords.needs_conversion {
+        fmt.println("Conversion needed - Source:", coords.source.x, coords.source.z, coords.source_dimension)
+        
+        // Convert coordinates between dimensions
+        target_dimension := coords.source_dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
+        converted_x := convert_between_dimensions(coords.source.x, coords.source_dimension, target_dimension)
+        converted_z := convert_between_dimensions(coords.source.z, coords.source_dimension, target_dimension)
+        
+        // Update destination coordinates
+        coords.converted.x = converted_x
+        coords.converted.z = converted_z
+        coords.converted.dimension = target_dimension
+        
+        fmt.println("Conversion complete - Converted:", coords.converted.x, coords.converted.z, coords.converted.dimension)
+        
+        // Conversion complete
+        coords.needs_conversion = false
+        converted = true
     }
-    return state.converted
+    return
 }
 
 // Convert coordinates to string representation
 coordinates_to_string :: proc(pair: CoordinatePair) -> string {
-    return fmt.tprintf("X: %d, Y: %d (%v)", pair.x, pair.y, pair.dimension)
-}
-
-// Key input configuration
-KeyConfig :: struct {
-    initial_delay: f32,  // Time before first repeat
-    repeat_rate: f32,    // Time between repeats
-}
-
-KeyState :: struct {
-    is_held: bool,
-    held_time: f32,
-    last_repeat_time: f32,
-    config: KeyConfig,
-}
-
-DEFAULT_KEY_CONFIG := KeyConfig{
-    initial_delay = 0.5,  // 500ms initial delay
-    repeat_rate = 0.05,   // 50ms between repeats
+    return fmt.tprintf("X: %d, Z: %d (%v)", pair.x, pair.z, pair.dimension)
 }
 
 // Update BackgroundImage struct to include shader
@@ -162,19 +162,69 @@ load_background_image :: proc(path: string, window_width, window_height: i32) ->
     }, true
 }
 
-// Update AppState to include background image
+// Location management
+Location :: struct {
+    name: string,
+    x: int,
+    z: int,
+    dimension: Dimension,
+    description: string,
+    tags: []string,
+}
+
+LocationDatabase :: struct {
+    locations: [dynamic]Location,
+    current_filter: string,
+    selected_index: int,
+}
+
+// Settings management
+Settings :: struct {
+    theme: string,
+    font_size: f32,
+    auto_save: bool,
+    default_dimension: Dimension,
+}
+
+// UI element types
+UIElement_ID :: distinct int
+UIElementState :: struct {
+    bounds: rl.Rectangle,
+    is_active: bool,
+    is_visible: bool,
+    is_hovered: bool,
+}
+
+Modal_State :: enum {
+    None,
+    SaveLocation,
+    LoadLocation,
+    Settings,
+    Help,
+}
+
+// UI state management
+UIState :: struct {
+    elements: map[UIElement_ID]UIElementState,
+    active_element: UIElement_ID,
+    previous_element: UIElement_ID,
+    modal_state: Modal_State,
+}
+
+// Update AppState to use new input system
 AppState :: struct {
     window_width: i32,
     window_height: i32,
     font: rl.Font,
     font_size: f32,
-    input_buffers: [2][10]u8,
-    active_input: int,
     coordinates: CoordinateState,
     help_visible: bool,
-    should_clear: bool,
-    key_states: map[rl.KeyboardKey]KeyState,
+    input: InputState,
     background: BackgroundImage,
+    // Future enhancements
+    locations: LocationDatabase,
+    settings: Settings,
+    ui_state: UIState,
 }
 
 WindowDefaultFlags :: struct {
@@ -236,7 +286,7 @@ UIElement :: struct {
     label_pos: Position,
 }
 
-DEFAULT_WINDOW_FLAGS := WindowDefaultFlags {
+WINDOW_DEFAULT_FLAGS := WindowDefaultFlags {
     title = "Minecraft Location Manager",
     width = 480,
     height = 640,
@@ -347,64 +397,19 @@ make_dimension_buttons :: proc(layout: Layout, pos: Position) -> (overworld: UIE
     return
 }
 
-// Initialize key state
-init_key_state :: proc(config: KeyConfig) -> KeyState {
-    return KeyState{
-        is_held = false,
-        held_time = 0,
-        last_repeat_time = 0,
-        config = config,
-    }
-}
-
-// Update key state and check if it should trigger
-update_key_state :: proc(state: ^KeyState, is_down: bool, current_time: f32) -> bool {
-    if is_down {
-        if !state.is_held {
-            // Key was just pressed
-            state.is_held = true
-            state.held_time = 0
-            state.last_repeat_time = current_time
-            return true
-        } else {
-            // Key is being held
-            state.held_time += rl.GetFrameTime()
-            if state.held_time >= state.config.initial_delay {
-                time_since_last := current_time - state.last_repeat_time
-                if time_since_last >= state.config.repeat_rate {
-                    state.last_repeat_time = current_time
-                    return true
-                }
-            }
-        }
-    } else {
-        // Key was released
-        state.is_held = false
-        state.held_time = 0
-    }
-    return false
-}
-
-// Initialize app with key states
+// Initialize app with input system
 init_app :: proc() -> AppState {
     state := AppState {
-        window_width = DEFAULT_WINDOW_FLAGS.width,
-        window_height = DEFAULT_WINDOW_FLAGS.height,
+        window_width = WINDOW_DEFAULT_FLAGS.width,
+        window_height = WINDOW_DEFAULT_FLAGS.height,
         font = load_font_with_fallback(),
         font_size = DEFAULT_FONT_SETTINGS.size,
-        input_buffers = {0, 0},
-        active_input = 0,
         coordinates = init_coordinate_state(),
         help_visible = false,
-        should_clear = false,
-        key_states = make(map[rl.KeyboardKey]KeyState),
     }
     
-    // Initialize key states
-    state.key_states[.BACKSPACE] = init_key_state(DEFAULT_KEY_CONFIG)
-    state.key_states[.LEFT] = init_key_state(DEFAULT_KEY_CONFIG)
-    state.key_states[.RIGHT] = init_key_state(DEFAULT_KEY_CONFIG)
-    state.key_states[.TAB] = init_key_state(KeyConfig{initial_delay = 0.5, repeat_rate = 0.2})
+    // Initialize input system
+    init_input_state(&state.input)
     
     // Load background image
     bg, ok := load_background_image("assets/tree-house.png", state.window_width, state.window_height)
@@ -414,149 +419,187 @@ init_app :: proc() -> AppState {
         fmt.eprintln("Failed to load background image")
     }
     
+    // Initialize future enhancement systems
+    state.locations = LocationDatabase {
+        locations = make([dynamic]Location),
+        current_filter = "",
+        selected_index = -1,
+    }
+    
+    state.settings = Settings {
+        theme = "default",
+        font_size = DEFAULT_FONT_SETTINGS.size,
+        auto_save = true,
+        default_dimension = .Overworld,
+    }
+    
+    state.ui_state = UIState {
+        elements = make(map[UIElement_ID]UIElementState),
+        active_element = -1,
+        previous_element = -1,
+        modal_state = .None,
+    }
+    
     return state
 }
 
-// Update coordinates based on input
-update_input_coordinates :: proc(state: ^AppState) {
-    // Convert input buffers to strings
-    x_str := string_from_bytes(state.input_buffers[0][:])
-    z_str := string_from_bytes(state.input_buffers[1][:])
-    
-    // Convert strings to integers
-    x, x_ok := strconv.parse_int(x_str)
-    z, z_ok := strconv.parse_int(z_str)
-    
-    // Update coordinates even if one is invalid (use 0 as default)
-    state.coordinates.source.x = x_ok ? x : 0
-    state.coordinates.source.y = z_ok ? z : 0
-    state.coordinates.needs_conversion = true
-}
+// Update main loop to handle dimension toggling
+main :: proc() {
+    // Initialize window
+    rl.InitWindow(WINDOW_DEFAULT_FLAGS.width, WINDOW_DEFAULT_FLAGS.height, strings.clone_to_cstring(WINDOW_DEFAULT_FLAGS.title))
+    defer rl.CloseWindow()
 
-// Handle key input with repeat
-handle_key_input :: proc(state: ^AppState) {
-    current_time := f32(rl.GetTime())
-    
-    // Handle backspace with repeat
-    if state.active_input >= 0 && state.active_input < 2 {
-        backspace_state := &state.key_states[.BACKSPACE]
-        if update_key_state(backspace_state, rl.IsKeyDown(.BACKSPACE), current_time) {
-            buffer := &state.input_buffers[state.active_input]
-            if buffer[0] != 0 {
-                // Find the end of the string
-                i: int = 0
-                for i < len(buffer) && buffer[i] != 0 {
-                    i += 1
-                }
-                if i > 0 {
-                    buffer[i-1] = 0
-                    update_input_coordinates(state)
-                }
-            }
-        }
+    // Set target FPS
+    rl.SetTargetFPS(60)
+
+    // Initialize app state
+    state := init_app()
+    defer {
+        rl.UnloadFont(state.font)
+        delete(state.input.key_states)
     }
     
-    // Handle arrow keys for dimension toggle
-    if state.active_input == 2 {
-        left_state := &state.key_states[.LEFT]
-        right_state := &state.key_states[.RIGHT]
+    // Initialize layout
+    layout := DEFAULT_LAYOUT
+    
+    // Initialize UI elements
+    x_input := make_input_box(layout, Position{20, 140}, "X:", state.font, state.font_size, 1)
+    z_input := make_input_box(layout, Position{20, 140 + layout.section_spacing}, "Z:", state.font, state.font_size, 1)
+    overworld_button, nether_button := make_dimension_buttons(layout, Position{20, 140 + 2*layout.section_spacing + layout.spacing})
+
+    // Main loop
+    for !rl.WindowShouldClose() {
+        // Handle input
+        update_input_state(&state.input)
         
-        if update_key_state(left_state, rl.IsKeyDown(.LEFT), current_time) ||
-           update_key_state(right_state, rl.IsKeyDown(.RIGHT), current_time) {
-            state.coordinates.source.dimension = state.coordinates.source.dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
+        // Handle keyboard input for coordinate updates
+        if state.input.active_input == .X || state.input.active_input == .Z {
+            // Update on any key press for active input
+            if rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.TAB) || rl.IsKeyPressed(.BACKSPACE) || 
+               (rl.IsKeyPressed(.ZERO) || rl.IsKeyPressed(.ONE) || rl.IsKeyPressed(.TWO) || 
+                rl.IsKeyPressed(.THREE) || rl.IsKeyPressed(.FOUR) || rl.IsKeyPressed(.FIVE) || 
+                rl.IsKeyPressed(.SIX) || rl.IsKeyPressed(.SEVEN) || rl.IsKeyPressed(.EIGHT) || 
+                rl.IsKeyPressed(.NINE) || rl.IsKeyPressed(.MINUS)) {
+                fmt.println("Updating coordinates from input")
+                update_coordinates_from_input(&state.input, &state.coordinates)
+            }
+        }
+
+        // Handle dimension toggle
+        if state.input.needs_dimension_toggle {
+            state.coordinates.source_dimension = state.coordinates.source_dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
             state.coordinates.needs_conversion = true
+            state.input.needs_dimension_toggle = false
         }
-    }
-    
-    // Handle tab navigation with repeat
-    tab_state := &state.key_states[.TAB]
-    if update_key_state(tab_state, rl.IsKeyDown(.TAB), current_time) {
-        // Update coordinates before changing focus
-        update_input_coordinates(state)
-        
-        if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
-            // Shift+Tab: Move backwards
-            if state.active_input > 0 {
-                state.active_input -= 1
-            } else {
-                state.active_input = 2
-            }
-        } else {
-            // Tab: Move forwards
-            if state.active_input < 2 {
-                state.active_input += 1
-            } else {
-                state.active_input = 0
-            }
-        }
-        // Set should_clear when focusing input field
-        state.should_clear = state.active_input < 2
-    }
-}
 
-// Update input handling procedures to use new key system
-handle_input :: proc(state: ^AppState) {
-    // Handle repeatable keys
-    handle_key_input(state)
-    
-    // Handle one-shot keys (no repeat needed)
-    if rl.IsKeyPressed(.ESCAPE) {
-        update_input_coordinates(state)
-        state.active_input = -1
-    }
-    
-    if rl.IsKeyPressed(.ENTER) {
-        update_input_coordinates(state)
-    }
-    
-    if rl.IsKeyPressed(.SPACE) && state.active_input == 2 {
-        state.coordinates.source.dimension = state.coordinates.source.dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
-        state.coordinates.needs_conversion = true
-    }
-    
-    // Handle numeric input and minus sign
-    if state.active_input >= 0 && state.active_input < 2 {
-        buffer := &state.input_buffers[state.active_input]
-        key := rl.GetCharPressed()
-        
-        if key != 0 {
-            // If this is a valid input character (number or minus)
-            if (key >= '0' && key <= '9') || (key == '-') {
-                // Find current length of buffer
-                i: int = 0
-                for i < len(buffer) && buffer[i] != 0 {
-                    i += 1
-                }
-                
-                if i < len(buffer) - 1 { // Leave room for null terminator
-                    // Clear buffer on first character after focusing if needed
-                    if state.should_clear {
-                        for j := 0; j < len(buffer); j += 1 {
-                            buffer[j] = 0
-                        }
-                        i = 0
-                        state.should_clear = false
-                    }
-                    
-                    // Only allow minus at start
-                    if key == '-' && i > 0 do return
-                    
-                    buffer[i] = u8(key)
-                    buffer[i+1] = 0
-                    update_input_coordinates(state)
-                }
+        // Handle mouse input
+        if rl.IsMouseButtonPressed(.LEFT) {
+            mouse_pos := rl.GetMousePosition()
+            
+            // Check if clicking on dimension buttons
+            if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) {
+                state.input.active_input = .Dimension
+                state.coordinates.source_dimension = Dimension.Overworld
+                state.coordinates.needs_conversion = true
+            } else if rl.CheckCollisionPointRec(mouse_pos, nether_button.rect) {
+                state.input.active_input = .Dimension
+                state.coordinates.source_dimension = Dimension.Nether
+                state.coordinates.needs_conversion = true
+            }
+            
+            // Check if clicking on input boxes
+            if rl.CheckCollisionPointRec(mouse_pos, x_input.rect) {
+                state.input.active_input = .X
+                state.input.should_clear = true
+            } else if rl.CheckCollisionPointRec(mouse_pos, z_input.rect) {
+                state.input.active_input = .Z
+                state.input.should_clear = true
+            } else {
+                state.input.active_input = .None
             }
         }
-    }
-}
 
-// Convert bytes to string
-string_from_bytes :: proc(bytes: []u8) -> string {
-    i: int = 0
-    for i < len(bytes) && bytes[i] != 0 {
-        i += 1
+        // Ensure coordinate conversion happens
+        if state.coordinates.needs_conversion {
+            fmt.println("Attempting conversion")
+            get_converted_coordinates(&state.coordinates)
+        }
+
+        rl.BeginDrawing()
+        defer rl.EndDrawing()
+
+        rl.ClearBackground(rl.BLACK)
+        
+        // Update shader uniforms and draw background
+        time := f32(rl.GetTime())
+        rl.SetShaderValue(state.background.shader, state.background.time_loc, &time, .FLOAT)
+        rl.BeginShaderMode(state.background.shader)
+        rl.DrawTexturePro(
+            state.background.texture,
+            state.background.source_rect,
+            state.background.dest_rect,
+            rl.Vector2{0, 0},
+            0,
+            rl.WHITE,
+        )
+        rl.EndShaderMode()
+        
+        // Draw title with outline
+        title_width := rl.MeasureTextEx(state.font, strings.clone_to_cstring(WINDOW_DEFAULT_FLAGS.title), state.font_size * 1.5, 1).x
+        title_x := f32(state.window_width/2) - title_width/2
+        draw_outlined_text(state.font, strings.clone_to_cstring(WINDOW_DEFAULT_FLAGS.title), rl.Vector2{title_x, 30}, state.font_size * 1.5, 1)
+        
+        // Draw input coordinates section
+        draw_outlined_text(state.font, "INPUT COORDINATES:", rl.Vector2{20, 95}, state.font_size, 1)
+        
+        // Draw X input
+        draw_outlined_text(state.font, "X:", rl.Vector2{x_input.label_pos.x, x_input.label_pos.y}, state.font_size, 1)
+        x_box_color := rl.ColorAlpha(state.input.active_input == .X ? rl.BLUE : rl.DARKGRAY, state.input.active_input == .X ? 0.7 : 0.5)
+        rl.DrawRectangleRec(x_input.rect, x_box_color)
+        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.input_buffers[0][:])), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, state.font_size, 1)
+        
+        // Draw Z input
+        draw_outlined_text(state.font, "Z:", rl.Vector2{z_input.label_pos.x, z_input.label_pos.y}, state.font_size, 1)
+        z_box_color := rl.ColorAlpha(state.input.active_input == .Z ? rl.BLUE : rl.DARKGRAY, state.input.active_input == .Z ? 0.7 : 0.5)
+        rl.DrawRectangleRec(z_input.rect, z_box_color)
+        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.input_buffers[1][:])), rl.Vector2{z_input.text_pos.x, z_input.text_pos.y}, state.font_size, 1)
+        
+        // Draw dimension selection
+        draw_outlined_text(state.font, "STARTING DIMENSION:", rl.Vector2{20, overworld_button.rect.y - layout.spacing}, state.font_size, 1)
+        
+        // Draw Overworld button
+        overworld_color := rl.ColorAlpha(
+            state.coordinates.source_dimension == Dimension.Overworld ? rl.SKYBLUE : rl.DARKGRAY,
+            0.7,
+        )
+        if state.input.active_input == .Dimension && state.coordinates.source_dimension == Dimension.Overworld {
+            overworld_color = rl.ColorAlpha(rl.BLUE, 0.7)
+        }
+        rl.DrawRectangleRec(overworld_button.rect, overworld_color)
+        draw_outlined_text(state.font, "OVERWORLD", rl.Vector2{overworld_button.text_pos.x, overworld_button.text_pos.y}, state.font_size, 1)
+        
+        // Draw Nether button
+        nether_color := rl.ColorAlpha(
+            state.coordinates.source_dimension == Dimension.Nether ? rl.SKYBLUE : rl.DARKGRAY,
+            0.7,
+        )
+        if state.input.active_input == .Dimension && state.coordinates.source_dimension == Dimension.Nether {
+            nether_color = rl.ColorAlpha(rl.BLUE, 0.7)
+        }
+        rl.DrawRectangleRec(nether_button.rect, nether_color)
+        draw_outlined_text(state.font, "NETHER", rl.Vector2{nether_button.text_pos.x, nether_button.text_pos.y}, state.font_size, 1)
+        
+        // Draw converted coordinates
+        converted := get_converted_coordinates(&state.coordinates)
+        converted_text := coordinates_to_string(state.coordinates.converted)
+        draw_outlined_text(
+            state.font,
+            strings.clone_to_cstring(converted_text),
+            rl.Vector2{DEFAULT_LAYOUT.margin, f32(state.window_height/2) + 50},
+            state.font_size,
+            1,
+        )
     }
-    return string(bytes[:i])
 }
 
 // Helper function to draw text with outline
@@ -607,142 +650,4 @@ calculate_image_crop :: proc(image_width, image_height, target_width, target_hei
     }
     
     return crop
-}
-
-// Update main drawing code to use shader
-main :: proc() {
-    // Initialize window
-    rl.InitWindow(DEFAULT_WINDOW_FLAGS.width, DEFAULT_WINDOW_FLAGS.height, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title))
-    defer rl.CloseWindow()
-
-    // Set target FPS
-    rl.SetTargetFPS(60)
-
-    // Initialize app state
-    state := init_app()
-    defer {
-        rl.UnloadFont(state.font)
-        rl.UnloadTexture(state.background.texture)
-        rl.UnloadShader(state.background.shader)
-        delete(state.key_states)
-    }
-    
-    // Initialize layout
-    layout := DEFAULT_LAYOUT
-    
-    // Initialize UI elements
-    x_input := make_input_box(layout, Position{20, 140}, "X:", state.font, state.font_size, 1)
-    z_input := make_input_box(layout, Position{20, 140 + layout.section_spacing}, "Z:", state.font, state.font_size, 1)
-    overworld_button, nether_button := make_dimension_buttons(layout, Position{20, 140 + 2*layout.section_spacing + layout.spacing})
-
-    // Main loop
-    for !rl.WindowShouldClose() {
-        // Handle input
-        handle_input(&state)
-        
-        // Handle mouse input for dimension toggle and input boxes
-        if rl.IsMouseButtonPressed(.LEFT) {
-            mouse_pos := rl.GetMousePosition()
-            if rl.CheckCollisionPointRec(mouse_pos, x_input.rect) {
-                update_input_coordinates(&state)
-                state.active_input = 0
-                state.should_clear = true
-            } else if rl.CheckCollisionPointRec(mouse_pos, z_input.rect) {
-                update_input_coordinates(&state)
-                state.active_input = 1
-                state.should_clear = true
-            } else if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) {
-                update_input_coordinates(&state)
-                state.active_input = 2
-                state.coordinates.source.dimension = .Overworld
-                state.coordinates.needs_conversion = true
-            } else if rl.CheckCollisionPointRec(mouse_pos, nether_button.rect) {
-                update_input_coordinates(&state)
-                state.active_input = 2
-                state.coordinates.source.dimension = .Nether
-                state.coordinates.needs_conversion = true
-            } else {
-                update_input_coordinates(&state)
-                state.active_input = -1
-                state.should_clear = false
-            }
-        }
-
-        rl.BeginDrawing()
-        defer rl.EndDrawing()
-
-        rl.ClearBackground(rl.BLACK)
-        
-        // Update shader uniforms
-        time := f32(rl.GetTime())
-        rl.SetShaderValue(state.background.shader, state.background.time_loc, &time, .FLOAT)
-        
-        // Begin shader mode and draw background
-        rl.BeginShaderMode(state.background.shader)
-        rl.DrawTexturePro(
-            state.background.texture,
-            state.background.source_rect,
-            state.background.dest_rect,
-            rl.Vector2{0, 0},
-            0,
-            rl.WHITE,
-        )
-        rl.EndShaderMode()
-        
-        // Draw title with outline
-        title_width := rl.MeasureTextEx(state.font, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title), state.font_size * 1.5, 1).x
-        title_x := f32(state.window_width/2) - title_width/2
-        draw_outlined_text(state.font, strings.clone_to_cstring(DEFAULT_WINDOW_FLAGS.title), rl.Vector2{title_x, 30}, state.font_size * 1.5, 1)
-        
-        // Draw input coordinates section
-        draw_outlined_text(state.font, "INPUT COORDINATES:", rl.Vector2{20, 95}, state.font_size, 1)
-        
-        // Draw X input
-        draw_outlined_text(state.font, "X:", rl.Vector2{x_input.label_pos.x, x_input.label_pos.y}, state.font_size, 1)
-        x_box_color := rl.ColorAlpha(state.active_input == 0 ? rl.BLUE : rl.DARKGRAY, state.active_input == 0 ? 0.7 : 0.5)
-        rl.DrawRectangleRec(x_input.rect, x_box_color)
-        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input_buffers[0][:])), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, state.font_size, 1)
-        
-        // Draw Z input
-        draw_outlined_text(state.font, "Z:", rl.Vector2{z_input.label_pos.x, z_input.label_pos.y}, state.font_size, 1)
-        z_box_color := rl.ColorAlpha(state.active_input == 1 ? rl.BLUE : rl.DARKGRAY, state.active_input == 1 ? 0.7 : 0.5)
-        rl.DrawRectangleRec(z_input.rect, z_box_color)
-        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input_buffers[1][:])), rl.Vector2{z_input.text_pos.x, z_input.text_pos.y}, state.font_size, 1)
-        
-        // Draw dimension selection
-        draw_outlined_text(state.font, "STARTING DIMENSION:", rl.Vector2{20, overworld_button.rect.y - layout.spacing}, state.font_size, 1)
-        
-        // Draw Overworld button
-        overworld_color := rl.ColorAlpha(
-            state.coordinates.source.dimension == Dimension.Overworld ? rl.SKYBLUE : rl.DARKGRAY,
-            0.7,
-        )
-        if state.active_input == 2 && state.coordinates.source.dimension == Dimension.Overworld {
-            overworld_color = rl.ColorAlpha(rl.BLUE, 0.7)
-        }
-        rl.DrawRectangleRec(overworld_button.rect, overworld_color)
-        draw_outlined_text(state.font, "OVERWORLD", rl.Vector2{overworld_button.text_pos.x, overworld_button.text_pos.y}, state.font_size, 1)
-        
-        // Draw Nether button
-        nether_color := rl.ColorAlpha(
-            state.coordinates.source.dimension == Dimension.Nether ? rl.SKYBLUE : rl.DARKGRAY,
-            0.7,
-        )
-        if state.active_input == 2 && state.coordinates.source.dimension == Dimension.Nether {
-            nether_color = rl.ColorAlpha(rl.BLUE, 0.7)
-        }
-        rl.DrawRectangleRec(nether_button.rect, nether_color)
-        draw_outlined_text(state.font, "NETHER", rl.Vector2{nether_button.text_pos.x, nether_button.text_pos.y}, state.font_size, 1)
-        
-        // Draw converted coordinates
-        converted := get_converted_coordinates(&state.coordinates)
-        converted_text := coordinates_to_string(converted)
-        draw_outlined_text(
-            state.font,
-            strings.clone_to_cstring(converted_text),
-            rl.Vector2{DEFAULT_LAYOUT.margin, f32(state.window_height/2) + 50},
-            state.font_size,
-            1,
-        )
-    }
 }
