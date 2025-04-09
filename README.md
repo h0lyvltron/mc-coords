@@ -1,4 +1,4 @@
-# Minecraft Coordinate Converter
+# Minecraft Location Manager
 
 A GUI tool for converting Minecraft coordinates between the Overworld and Nether dimensions. Built with Odin and raylib.
 
