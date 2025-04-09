@@ -8,7 +8,6 @@ import "core:os"
 import "core:math"
 import rl "vendor:raylib"
 
-// Define Dimension enum
 Dimension :: enum {
     Overworld,
     Nether,
@@ -26,7 +25,6 @@ CoordinateState :: struct {
     needs_conversion: bool,
 }
 
-// Initialize a new coordinate state with default values
 init_coordinate_state :: proc() -> CoordinateState {
     return CoordinateState {
         source = CoordinatePair{0, 0, Dimension.Overworld},
@@ -36,7 +34,6 @@ init_coordinate_state :: proc() -> CoordinateState {
     }
 }
 
-// Update source coordinates and mark for conversion if changed
 update_coordinates :: proc(state: ^CoordinateState, x: int, z: int) {
     if x != state.source.x || z != state.source.z {
         state.source.x = x
@@ -45,7 +42,6 @@ update_coordinates :: proc(state: ^CoordinateState, x: int, z: int) {
     }
 }
 
-// Update dimension and mark for conversion if changed
 update_dimension :: proc(state: ^CoordinateState, dimension: Dimension) {
     if dimension != state.source_dimension {
         state.source_dimension = dimension
@@ -53,7 +49,6 @@ update_dimension :: proc(state: ^CoordinateState, dimension: Dimension) {
     }
 }
 
-// Convert coordinates between Overworld and Nether
 convert_coordinate_value :: proc(x: int, dimension: Dimension) -> int {
     switch dimension {
     case .Overworld:
@@ -64,7 +59,6 @@ convert_coordinate_value :: proc(x: int, dimension: Dimension) -> int {
     return x
 }
 
-// Convert coordinates from one dimension to another
 convert_between_dimensions :: proc(x: int, from: Dimension, to: Dimension) -> int {
     if from == to {
         return x
@@ -78,36 +72,30 @@ convert_between_dimensions :: proc(x: int, from: Dimension, to: Dimension) -> in
     return x
 }
 
-// Get converted coordinates
 get_converted_coordinates :: proc(coords: ^CoordinateState) -> (converted: bool) {
     if coords.needs_conversion {
         fmt.println("Conversion needed - Source:", coords.source.x, coords.source.z, coords.source_dimension)
         
-        // Convert coordinates between dimensions
         target_dimension := coords.source_dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
         converted_x := convert_between_dimensions(coords.source.x, coords.source_dimension, target_dimension)
         converted_z := convert_between_dimensions(coords.source.z, coords.source_dimension, target_dimension)
         
-        // Update destination coordinates
         coords.converted.x = converted_x
         coords.converted.z = converted_z
         coords.converted.dimension = target_dimension
         
         fmt.println("Conversion complete - Converted:", coords.converted.x, coords.converted.z, coords.converted.dimension)
         
-        // Conversion complete
         coords.needs_conversion = false
         converted = true
     }
     return
 }
 
-// Convert coordinates to string representation
 coordinates_to_string :: proc(pair: CoordinatePair) -> string {
     return fmt.tprintf("X: %d, Z: %d (%v)", pair.x, pair.z, pair.dimension)
 }
 
-// Update BackgroundImage struct to include shader
 BackgroundImage :: struct {
     texture: rl.Texture2D,
     source_rect: rl.Rectangle,
@@ -117,7 +105,6 @@ BackgroundImage :: struct {
     resolution_loc: i32,  // Uniform location for resolution
 }
 
-// Update load_background_image to include shader initialization
 load_background_image :: proc(path: string, window_width, window_height: i32) -> (BackgroundImage, bool) {
     image := rl.LoadImage(strings.clone_to_cstring(path))
     if image.data == nil {
@@ -126,17 +113,14 @@ load_background_image :: proc(path: string, window_width, window_height: i32) ->
     }
     defer rl.UnloadImage(image)
     
-    // Calculate optimal crop region
     crop := calculate_image_crop(image.width, image.height, window_width, window_height)
     
-    // Create texture from image
     texture := rl.LoadTextureFromImage(image)
     if texture.id == 0 {
         fmt.eprintln("Failed to create texture from image:", path)
         return BackgroundImage{}, false
     }
     
-    // Load shader
     shader := rl.LoadShaderFromMemory(BACKGROUND_VERTEX_SHADER, BACKGROUND_FRAGMENT_SHADER)
     if shader.id == 0 {
         fmt.eprintln("Failed to load background shader")
@@ -144,11 +128,9 @@ load_background_image :: proc(path: string, window_width, window_height: i32) ->
         return BackgroundImage{}, false
     }
     
-    // Get uniform locations
     time_loc := rl.GetShaderLocation(shader, "time")
     resolution_loc := rl.GetShaderLocation(shader, "resolution")
     
-    // Set initial resolution uniform
     resolution := [2]f32{f32(window_width), f32(window_height)}
     rl.SetShaderValue(shader, resolution_loc, &resolution, .VEC2)
     
@@ -162,7 +144,6 @@ load_background_image :: proc(path: string, window_width, window_height: i32) ->
     }, true
 }
 
-// Location management
 Location :: struct {
     name: string,
     x: int,
@@ -178,7 +159,6 @@ LocationDatabase :: struct {
     selected_index: int,
 }
 
-// Settings management
 Settings :: struct {
     theme: string,
     font_size: f32,
@@ -186,7 +166,6 @@ Settings :: struct {
     default_dimension: Dimension,
 }
 
-// UI element types
 UIElement_ID :: distinct int
 UIElementState :: struct {
     bounds: rl.Rectangle,
@@ -203,7 +182,6 @@ Modal_State :: enum {
     Help,
 }
 
-// UI state management
 UIState :: struct {
     elements: map[UIElement_ID]UIElementState,
     active_element: UIElement_ID,
@@ -211,7 +189,6 @@ UIState :: struct {
     modal_state: Modal_State,
 }
 
-// Update AppState to use new input system
 AppState :: struct {
     window_width: i32,
     window_height: i32,
@@ -221,7 +198,6 @@ AppState :: struct {
     help_visible: bool,
     input: InputState,
     background: BackgroundImage,
-    // Clipboard state
     clipboard: struct {
         hovered: bool,
         last_copied: f32,
@@ -307,14 +283,12 @@ DEFAULT_FONT_SETTINGS := FontSettings {
 }
 
 load_font_with_fallback :: proc() -> rl.Font {
-    // Try common paths for Minecraft font
-    minecraft_paths := []string{
+    font_paths := []string{
         "assets/fonts/MinecraftTen-VGORe.ttf",
         "./assets/fonts/MinecraftTen-VGORe.ttf",
         "C:/Windows/Fonts/MinecraftTen-VGORe.ttf",
     }
 
-    // Check user fonts directory
     local_app_data := os.get_env("LOCALAPPDATA", context.temp_allocator)
     if local_app_data != "" {
         user_font_path := fmt.tprintf("%s/Microsoft/Windows/Fonts/MinecraftTen-VGORe.ttf", local_app_data)
@@ -328,8 +302,7 @@ load_font_with_fallback :: proc() -> rl.Font {
         }
     }
 
-    // Try to load Minecraft font from various paths
-    for path in minecraft_paths {
+    for path in font_paths {
         if os.exists(path) {
             font := rl.LoadFont(strings.clone_to_cstring(path))
             if font.texture.id != 0 && rl.GetGlyphIndex(font, 'A') != 0 {
@@ -340,14 +313,12 @@ load_font_with_fallback :: proc() -> rl.Font {
         }
     }
 
-    // Fallback to Consolas
     consolas := rl.LoadFont(strings.clone_to_cstring("C:/Windows/Fonts/consola.ttf"))
     if consolas.texture.id != 0 && rl.GetGlyphIndex(consolas, 'A') != 0 {
         fmt.println("Using Consolas as fallback font")
         return consolas
     }
 
-    // Final fallback to default raylib font
     fmt.println("Using default raylib font")
     return rl.GetFontDefault()
 }
@@ -402,7 +373,6 @@ make_dimension_buttons :: proc(layout: Layout, pos: Position) -> (overworld: UIE
     return
 }
 
-// Initialize app with input system
 init_app :: proc() -> AppState {
     state := AppState {
         window_width = WINDOW_DEFAULT_FLAGS.width,
@@ -413,10 +383,8 @@ init_app :: proc() -> AppState {
         help_visible = false,
     }
     
-    // Initialize input system
     init_input_state(&state.input)
     
-    // Load background image
     bg, ok := load_background_image("assets/tree-house.png", state.window_width, state.window_height)
     if ok {
         state.background = bg
@@ -424,7 +392,6 @@ init_app :: proc() -> AppState {
         fmt.eprintln("Failed to load background image")
     }
     
-    // Initialize future enhancement systems
     state.locations = LocationDatabase {
         locations = make([dynamic]Location),
         current_filter = "",
@@ -448,38 +415,29 @@ init_app :: proc() -> AppState {
     return state
 }
 
-// Update main loop to handle dimension toggling
 main :: proc() {
-    // Initialize window
     rl.InitWindow(WINDOW_DEFAULT_FLAGS.width, WINDOW_DEFAULT_FLAGS.height, strings.clone_to_cstring(WINDOW_DEFAULT_FLAGS.title))
     defer rl.CloseWindow()
 
-    // Set target FPS
     rl.SetTargetFPS(60)
 
-    // Initialize app state
     state := init_app()
     defer {
         rl.UnloadFont(state.font)
         delete(state.input.key_states)
     }
     
-    // Initialize layout
     layout := DEFAULT_LAYOUT
     
-    // Initialize UI elements
     x_input := make_input_box(layout, Position{20, 140}, "X:", state.font, state.font_size, 1)
     z_input := make_input_box(layout, Position{20, 140 + layout.section_spacing}, "Z:", state.font, state.font_size, 1)
     overworld_button, nether_button := make_dimension_buttons(layout, Position{20, 140 + 2*layout.section_spacing + layout.spacing})
 
-    // Main loop
     for !rl.WindowShouldClose() {
-        // Handle mouse input first
         if rl.IsMouseButtonPressed(.LEFT) {
             mouse_pos := rl.GetMousePosition()
             handled_click := false
             
-            // Check if clicking on dimension buttons
             if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) {
                 if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Overworld {
                     fmt.println("State change: Clicked Overworld button")
@@ -498,7 +456,6 @@ main :: proc() {
                 handled_click = true
             }
             
-            // Check if clicking on input boxes
             if !handled_click && rl.CheckCollisionPointRec(mouse_pos, x_input.rect) {
                 if state.input.active_input != .X {
                     fmt.println("State change: Clicked X input")
@@ -514,7 +471,6 @@ main :: proc() {
                 }
                 handled_click = true
             } else if !handled_click && state.clipboard.hovered {
-                // Copy entire coordinate pair to clipboard
                 coord_str := fmt.tprintf("%d, %d", state.coordinates.converted.x, state.coordinates.converted.z)
                 rl.SetClipboardText(strings.clone_to_cstring(coord_str))
                 state.clipboard.last_copied = 0.5 // Start feedback animation
@@ -525,15 +481,11 @@ main :: proc() {
             }
         }
 
-        // Handle input state update after mouse input
         if update_input_state(&state.input) {
-            // If input state update indicates a change that needs coordinate update
             update_coordinates_from_input(&state.input, &state.coordinates)
         }
 
-        // Handle keyboard input for coordinate updates
         if state.input.active_input == .X || state.input.active_input == .Z {
-            // Update on any key press for active input
             if rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.TAB) || rl.IsKeyPressed(.BACKSPACE) || 
                (rl.IsKeyPressed(.ZERO) || rl.IsKeyPressed(.ONE) || rl.IsKeyPressed(.TWO) || 
                 rl.IsKeyPressed(.THREE) || rl.IsKeyPressed(.FOUR) || rl.IsKeyPressed(.FIVE) || 
@@ -543,27 +495,22 @@ main :: proc() {
             }
         }
 
-        // Handle dimension toggle
         if state.input.needs_dimension_toggle {
             state.coordinates.source_dimension = state.coordinates.source_dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
             state.coordinates.needs_conversion = true
             state.input.needs_dimension_toggle = false
         }
 
-        // Define converted coordinate positions
         converted_pos := rl.Vector2{DEFAULT_LAYOUT.margin, f32(state.window_height/2) + 50}
         converted_rect := rl.Rectangle{converted_pos.x, converted_pos.y, 200, state.font_size * 2}
 
-        // Update hover state for converted coordinates
         mouse_pos := rl.GetMousePosition()
         state.clipboard.hovered = rl.CheckCollisionPointRec(mouse_pos, converted_rect)
 
-        // Update copy feedback animation
         if state.clipboard.last_copied > 0 {
             state.clipboard.last_copied -= rl.GetFrameTime()
         }
 
-        // Ensure coordinate conversion happens
         if state.coordinates.needs_conversion {
             fmt.println("Attempting conversion")
             get_converted_coordinates(&state.coordinates)
@@ -574,7 +521,6 @@ main :: proc() {
 
         rl.ClearBackground(rl.BLACK)
         
-        // Update shader uniforms and draw background
         time := f32(rl.GetTime())
         rl.SetShaderValue(state.background.shader, state.background.time_loc, &time, .FLOAT)
         rl.BeginShaderMode(state.background.shader)
@@ -588,30 +534,24 @@ main :: proc() {
         )
         rl.EndShaderMode()
         
-        // Draw title with outline
         title_width := rl.MeasureTextEx(state.font, strings.clone_to_cstring(WINDOW_DEFAULT_FLAGS.title), state.font_size * 1.5, 1).x
         title_x := f32(state.window_width/2) - title_width/2
         draw_outlined_text(state.font, strings.clone_to_cstring(WINDOW_DEFAULT_FLAGS.title), rl.Vector2{title_x, 30}, state.font_size * 1.5, 1)
         
-        // Draw input coordinates section
         draw_outlined_text(state.font, "INPUT COORDINATES:", rl.Vector2{20, 95}, state.font_size, 1)
         
-        // Draw X input
         draw_outlined_text(state.font, "X:", rl.Vector2{x_input.label_pos.x, x_input.label_pos.y}, state.font_size, 1)
         x_box_color := rl.ColorAlpha(state.input.active_input == .X ? rl.BLUE : rl.DARKGRAY, state.input.active_input == .X ? 0.7 : 0.5)
         rl.DrawRectangleRec(x_input.rect, x_box_color)
         draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.input_buffers[0][:])), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, state.font_size, 1)
         
-        // Draw Z input
         draw_outlined_text(state.font, "Z:", rl.Vector2{z_input.label_pos.x, z_input.label_pos.y}, state.font_size, 1)
         z_box_color := rl.ColorAlpha(state.input.active_input == .Z ? rl.BLUE : rl.DARKGRAY, state.input.active_input == .Z ? 0.7 : 0.5)
         rl.DrawRectangleRec(z_input.rect, z_box_color)
         draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.input_buffers[1][:])), rl.Vector2{z_input.text_pos.x, z_input.text_pos.y}, state.font_size, 1)
         
-        // Draw dimension selection
         draw_outlined_text(state.font, "STARTING DIMENSION:", rl.Vector2{20, overworld_button.rect.y - layout.spacing}, state.font_size, 1)
         
-        // Draw Overworld button
         overworld_color := rl.ColorAlpha(
             state.coordinates.source_dimension == Dimension.Overworld ? rl.SKYBLUE : rl.DARKGRAY,
             0.7,
@@ -622,7 +562,6 @@ main :: proc() {
         rl.DrawRectangleRec(overworld_button.rect, overworld_color)
         draw_outlined_text(state.font, "OVERWORLD", rl.Vector2{overworld_button.text_pos.x, overworld_button.text_pos.y}, state.font_size, 1)
         
-        // Draw Nether button
         nether_color := rl.ColorAlpha(
             state.coordinates.source_dimension == Dimension.Nether ? rl.SKYBLUE : rl.DARKGRAY,
             0.7,
@@ -632,11 +571,8 @@ main :: proc() {
         }
         rl.DrawRectangleRec(nether_button.rect, nether_color)
         draw_outlined_text(state.font, "NETHER", rl.Vector2{nether_button.text_pos.x, nether_button.text_pos.y}, state.font_size, 1)
-        
-        // Draw converted coordinates with hover
         coord_text := fmt.tprintf("X: %d, Z: %d", state.coordinates.converted.x, state.coordinates.converted.z)
         
-        // Use outlined text with larger font size
         draw_outlined_text(
             state.font,
             strings.clone_to_cstring(coord_text),
@@ -646,7 +582,6 @@ main :: proc() {
             1,  // Outline thickness
         )
 
-        // Draw copy feedback if needed
         if state.clipboard.last_copied > 0 {
             feedback_text := "Copied!"
             feedback_pos := rl.Vector2{converted_pos.x + 200, converted_pos.y}
@@ -662,9 +597,7 @@ main :: proc() {
     }
 }
 
-// Helper function to draw text with outline
 draw_outlined_text :: proc(font: rl.Font, text: cstring, position: rl.Vector2, font_size: f32, spacing: f32, thickness: f32 = 1) {
-    // Draw outline (white)
     offsets := [][2]f32{
         {-thickness, -thickness},
         {-thickness, 0},
@@ -681,30 +614,22 @@ draw_outlined_text :: proc(font: rl.Font, text: cstring, position: rl.Vector2, f
         rl.DrawTextEx(font, text, pos, font_size, spacing, rl.WHITE)
     }
     
-    // Draw main text (black)
     rl.DrawTextEx(font, text, position, font_size, spacing, rl.BLACK)
 }
 
-// Calculate the optimal crop region for fitting an image while maintaining aspect ratio
 calculate_image_crop :: proc(image_width, image_height, target_width, target_height: i32) -> rl.Rectangle {
     source_aspect := f32(image_width) / f32(image_height)
     target_aspect := f32(target_width) / f32(target_height)
-    
-    // Initialize crop rectangle
     crop := rl.Rectangle{}
     
     if source_aspect > target_aspect {
-        // Image is wider than target - crop width
         crop.height = f32(image_height)
         crop.width = crop.height * target_aspect
-        // Center horizontally
         crop.x = f32(image_width - i32(crop.width)) / 2
         crop.y = 0
     } else {
-        // Image is taller than target - crop height
         crop.width = f32(image_width)
         crop.height = crop.width / target_aspect
-        // Center vertically
         crop.x = 0
         crop.y = f32(image_height - i32(crop.height)) / 2
     }
