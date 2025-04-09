@@ -221,6 +221,11 @@ AppState :: struct {
     help_visible: bool,
     input: InputState,
     background: BackgroundImage,
+    // Clipboard state
+    clipboard: struct {
+        hovered: bool,
+        last_copied: f32,
+    },
     // Future enhancements
     locations: LocationDatabase,
     settings: Settings,
@@ -469,9 +474,63 @@ main :: proc() {
 
     // Main loop
     for !rl.WindowShouldClose() {
-        // Handle input
-        update_input_state(&state.input)
-        
+        // Handle mouse input first
+        if rl.IsMouseButtonPressed(.LEFT) {
+            mouse_pos := rl.GetMousePosition()
+            handled_click := false
+            
+            // Check if clicking on dimension buttons
+            if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) {
+                if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Overworld {
+                    fmt.println("State change: Clicked Overworld button")
+                    state.input.active_input = .Dimension
+                    state.coordinates.source_dimension = Dimension.Overworld
+                    state.coordinates.needs_conversion = true
+                }
+                handled_click = true
+            } else if rl.CheckCollisionPointRec(mouse_pos, nether_button.rect) {
+                if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Nether {
+                    fmt.println("State change: Clicked Nether button")
+                    state.input.active_input = .Dimension
+                    state.coordinates.source_dimension = Dimension.Nether
+                    state.coordinates.needs_conversion = true
+                }
+                handled_click = true
+            }
+            
+            // Check if clicking on input boxes
+            if !handled_click && rl.CheckCollisionPointRec(mouse_pos, x_input.rect) {
+                if state.input.active_input != .X {
+                    fmt.println("State change: Clicked X input")
+                    state.input.active_input = .X
+                    state.input.should_clear = true
+                }
+                handled_click = true
+            } else if !handled_click && rl.CheckCollisionPointRec(mouse_pos, z_input.rect) {
+                if state.input.active_input != .Z {
+                    fmt.println("State change: Clicked Z input")
+                    state.input.active_input = .Z
+                    state.input.should_clear = true
+                }
+                handled_click = true
+            } else if !handled_click && state.clipboard.hovered {
+                // Copy entire coordinate pair to clipboard
+                coord_str := fmt.tprintf("%d, %d", state.coordinates.converted.x, state.coordinates.converted.z)
+                rl.SetClipboardText(strings.clone_to_cstring(coord_str))
+                state.clipboard.last_copied = 0.5 // Start feedback animation
+                handled_click = true
+            } else if !handled_click && state.input.active_input != .None {
+                fmt.println("State change: Clicked outside inputs")
+                state.input.active_input = .None
+            }
+        }
+
+        // Handle input state update after mouse input
+        if update_input_state(&state.input) {
+            // If input state update indicates a change that needs coordinate update
+            update_coordinates_from_input(&state.input, &state.coordinates)
+        }
+
         // Handle keyboard input for coordinate updates
         if state.input.active_input == .X || state.input.active_input == .Z {
             // Update on any key press for active input
@@ -480,7 +539,6 @@ main :: proc() {
                 rl.IsKeyPressed(.THREE) || rl.IsKeyPressed(.FOUR) || rl.IsKeyPressed(.FIVE) || 
                 rl.IsKeyPressed(.SIX) || rl.IsKeyPressed(.SEVEN) || rl.IsKeyPressed(.EIGHT) || 
                 rl.IsKeyPressed(.NINE) || rl.IsKeyPressed(.MINUS)) {
-                fmt.println("Updating coordinates from input")
                 update_coordinates_from_input(&state.input, &state.coordinates)
             }
         }
@@ -492,31 +550,17 @@ main :: proc() {
             state.input.needs_dimension_toggle = false
         }
 
-        // Handle mouse input
-        if rl.IsMouseButtonPressed(.LEFT) {
-            mouse_pos := rl.GetMousePosition()
-            
-            // Check if clicking on dimension buttons
-            if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) {
-                state.input.active_input = .Dimension
-                state.coordinates.source_dimension = Dimension.Overworld
-                state.coordinates.needs_conversion = true
-            } else if rl.CheckCollisionPointRec(mouse_pos, nether_button.rect) {
-                state.input.active_input = .Dimension
-                state.coordinates.source_dimension = Dimension.Nether
-                state.coordinates.needs_conversion = true
-            }
-            
-            // Check if clicking on input boxes
-            if rl.CheckCollisionPointRec(mouse_pos, x_input.rect) {
-                state.input.active_input = .X
-                state.input.should_clear = true
-            } else if rl.CheckCollisionPointRec(mouse_pos, z_input.rect) {
-                state.input.active_input = .Z
-                state.input.should_clear = true
-            } else {
-                state.input.active_input = .None
-            }
+        // Define converted coordinate positions
+        converted_pos := rl.Vector2{DEFAULT_LAYOUT.margin, f32(state.window_height/2) + 50}
+        converted_rect := rl.Rectangle{converted_pos.x, converted_pos.y, 200, state.font_size * 2}
+
+        // Update hover state for converted coordinates
+        mouse_pos := rl.GetMousePosition()
+        state.clipboard.hovered = rl.CheckCollisionPointRec(mouse_pos, converted_rect)
+
+        // Update copy feedback animation
+        if state.clipboard.last_copied > 0 {
+            state.clipboard.last_copied -= rl.GetFrameTime()
         }
 
         // Ensure coordinate conversion happens
@@ -589,16 +633,32 @@ main :: proc() {
         rl.DrawRectangleRec(nether_button.rect, nether_color)
         draw_outlined_text(state.font, "NETHER", rl.Vector2{nether_button.text_pos.x, nether_button.text_pos.y}, state.font_size, 1)
         
-        // Draw converted coordinates
-        converted := get_converted_coordinates(&state.coordinates)
-        converted_text := coordinates_to_string(state.coordinates.converted)
+        // Draw converted coordinates with hover
+        coord_text := fmt.tprintf("X: %d, Z: %d", state.coordinates.converted.x, state.coordinates.converted.z)
+        
+        // Use outlined text with larger font size
         draw_outlined_text(
             state.font,
-            strings.clone_to_cstring(converted_text),
-            rl.Vector2{DEFAULT_LAYOUT.margin, f32(state.window_height/2) + 50},
-            state.font_size,
+            strings.clone_to_cstring(coord_text),
+            converted_pos,
+            state.font_size * 1.2,  // 20% larger font
             1,
+            1,  // Outline thickness
         )
+
+        // Draw copy feedback if needed
+        if state.clipboard.last_copied > 0 {
+            feedback_text := "Copied!"
+            feedback_pos := rl.Vector2{converted_pos.x + 200, converted_pos.y}
+            rl.DrawTextEx(
+                state.font,
+                strings.clone_to_cstring(feedback_text),
+                feedback_pos,
+                state.font_size,
+                1,
+                rl.GREEN,
+            )
+        }
     }
 }
 

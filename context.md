@@ -28,6 +28,7 @@
 - Dimension selection buttons (Overworld/Nether)
 - Title and section headers with outline effects
 - Converted coordinate display
+- Clickable converted coordinates with clipboard support
 
 ### Debug System
 - Debug mode toggle for detailed logging
@@ -46,6 +47,7 @@
 - [ ] Debug logging
 - [ ] Input validation feedback
 - [ ] Custom key binding support
+- [ ] Clipboard integration
 
 ### UI State
 - [x] Active element tracking
@@ -54,6 +56,8 @@
 - [ ] Modal dialog system
 - [ ] Animation system
 - [ ] Theme support
+- [ ] Hover state tracking
+- [ ] Clipboard feedback
 
 ### Settings
 - [x] Basic settings structure

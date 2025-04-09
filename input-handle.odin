@@ -191,7 +191,7 @@ handle_numeric_input :: proc(state: ^InputState, key: rune) -> bool {
 }
 
 // Update input state
-update_input_state :: proc(state: ^InputState) {
+update_input_state :: proc(state: ^InputState) -> bool {
     current_time := f32(rl.GetTime())
     
     // Update mouse position
@@ -213,6 +213,8 @@ update_input_state :: proc(state: ^InputState) {
                         }
                         if i > 0 {
                             buffer[i-1] = 0
+                            // Trigger coordinate update on backspace
+                            return true
                         }
                     }
                 }
@@ -262,6 +264,8 @@ update_input_state :: proc(state: ^InputState) {
     if key != 0 {
         handle_numeric_input(state, key)
     }
+    
+    return false
 }
 
 // Check if an action is pressed
@@ -348,12 +352,8 @@ update_coordinates_from_input :: proc(input: ^InputState, coords: ^CoordinateSta
     fmt.println("Parsed values:", x, z, "Valid:", x_ok, z_ok)
     
     // Update coordinates even if one is invalid (default to 0)
-    if x_ok {
-        coords.source.x = x
-    }
-    if z_ok {
-        coords.source.z = z
-    }
+    coords.source.x = x_ok ? x : 0
+    coords.source.z = z_ok ? z : 0
     
     fmt.println("Updated source coordinates:", coords.source.x, coords.source.z)
     
