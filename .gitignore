@@ -22,3 +22,6 @@ Thumbs.db
 # Font files
 *.ttf
 *.otf
+
+# Cursor files
+context.md

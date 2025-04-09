@@ -17,7 +17,7 @@ A GUI tool for converting Minecraft coordinates between the Overworld and Nether
 ## Technical Details
 - Language: Odin
 - GUI: raylib
-- Suggested Font: [Minecraft Ten](https://www.fontspace.com/minecraft-ten-font-f40317) (third party, not included in repository/release package for fear of legal retribution)
+- Suggested Font: [Minecraft Ten](https://www.fontspace.com/minecraft-ten-font-f40317) (third party, not included in repository/release for fear of legal retribution)
 - Platform: Windows
 
 ## Development
