@@ -1,5 +1,9 @@
 # Minecraft Coordinate Converter - Development Context
 
+## Formatting Instructions
+- files will be named in all lowercase and in kebab format
+- modules will start with package main and files will be set in the root directory alongside main.odin
+
 ## Current Implementation
 
 ### Core Systems
@@ -11,7 +15,7 @@
 - Debug mode for troubleshooting
 
 ### Input System (input-handle.odin)
-- Structured input handling with `InputBox` enum for different input types
+- Structured input handling
 - Key state management with repeat functionality
 - Mouse input handling
 - Tab navigation between input elements
