@@ -134,4 +134,121 @@ void main() {
     
     finalColor = texColor * vec4(vec3(shadowEffect), 1.0) * fragColor;
 }
+`
+
+RAYMARCH_VERTEX_SHADER :: `
+#version 330
+
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+in vec4 vertexColor;
+
+out vec2 fragTexCoord;
+out vec4 fragColor;
+
+uniform mat4 mvp;
+
+void main() {
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+    gl_Position = mvp * vec4(vertexPosition, 1.0);
+}
+`
+
+RAYMARCH_FRAGMENT_SHADER :: `
+#version 330
+
+in vec2 fragTexCoord;
+in vec4 fragColor;
+
+out vec4 finalColor;
+
+uniform sampler2D texture0;
+uniform float time;
+uniform vec2 resolution;
+uniform vec4 tintColor;
+
+// Raymarching parameters
+const int MAX_STEPS = 100;
+const float MAX_DIST = 20.0;
+const float SURF_DIST = 0.001;
+
+// Noise function for shimmer effect
+float noise(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Smooth noise
+float smoothNoise(vec2 p) {
+    vec2 ip = floor(p);
+    vec2 u = fract(p);
+    u = u * u * (3.0 - 2.0 * u);
+    
+    float a = noise(ip);
+    float b = noise(ip + vec2(1.0, 0.0));
+    float c = noise(ip + vec2(0.0, 1.0));
+    float d = noise(ip + vec2(1.0, 1.0));
+    
+    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
+// Shimmer effect
+float shimmer(vec2 uv, float time) {
+    float shimmer = 0.0;
+    float scale = 1.0;
+    float speed = 1.0;
+    
+    for(int i = 0; i < 3; i++) {
+        shimmer += smoothNoise(uv * scale + time * speed) * 0.5;
+        scale *= 2.0;
+        speed *= 1.5;
+    }
+    
+    return shimmer * 0.5 + 0.5;
+}
+
+// Distance function for raymarching
+float sdBox(vec2 p, vec2 b) {
+    vec2 d = abs(p) - b;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+
+// Raymarching function
+float raymarch(vec2 ro, vec2 rd) {
+    float d = 0.0;
+    
+    for(int i = 0; i < MAX_STEPS; i++) {
+        vec2 p = ro + rd * d;
+        float ds = sdBox(p, vec2(0.5));
+        d += ds;
+        if(ds < SURF_DIST || d > MAX_DIST) break;
+    }
+    
+    return d;
+}
+
+void main() {
+    vec2 uv = fragTexCoord;
+    vec4 texColor = texture(texture0, uv);
+    
+    // Calculate shimmer effect
+    float shimmer = shimmer(uv, time);
+    
+    // Add subtle color shift based on shimmer
+    vec3 colorShift = vec3(
+        sin(time * 0.5) * 0.1,
+        cos(time * 0.3) * 0.1,
+        sin(time * 0.7) * 0.1
+    );
+    
+    // Apply shimmer and color shift
+    vec3 finalColorRGB = texColor.rgb * (1.0 + shimmer * 0.2) + colorShift * shimmer;
+    
+    // Add subtle pulsing
+    float pulse = sin(time * 2.0) * 0.05 + 0.95;
+    finalColorRGB *= pulse;
+    
+    // Apply tint color
+    finalColor = vec4(finalColorRGB, texColor.a) * tintColor;
+}
 ` 
