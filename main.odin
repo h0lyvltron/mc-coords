@@ -45,6 +45,11 @@ TitleImage :: struct {
         wave_amplitude_loc: i32,
         wave_frequency_loc: i32,
         wave_smoothness_loc: i32,
+        // Color parameters
+        color_speed_loc: i32,
+        color_phase_loc: i32,
+        color_spread_loc: i32,
+        color_intensity_loc: i32,
     },
     hover_state: struct {
         index: i32,
@@ -59,6 +64,11 @@ TitleImage :: struct {
         amplitude: f32,
         frequency: f32,
         smoothness: f32,
+        // Color parameters
+        color_speed: f32,
+        color_phase: f32,
+        color_spread: f32,
+        color_intensity: f32,
     },
 }
 
@@ -135,6 +145,18 @@ init_app :: proc() -> AppState {
                     state.title.shaders[i].wave_amplitude_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_amplitude")
                     state.title.shaders[i].wave_frequency_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_frequency")
                     state.title.shaders[i].wave_smoothness_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_smoothness")
+                    
+                    // Get color uniform locations
+                    state.title.shaders[i].color_speed_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_speed")
+                    state.title.shaders[i].color_phase_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_phase")
+                    state.title.shaders[i].color_spread_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_spread")
+                    state.title.shaders[i].color_intensity_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_intensity")
+                    
+                    // Set initial values for color parameters
+                    rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].color_speed_loc, &state.title.wave_params.color_speed, .FLOAT)
+                    rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].color_phase_loc, &state.title.wave_params.color_phase, .FLOAT)
+                    rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].color_spread_loc, &state.title.wave_params.color_spread, .FLOAT)
+                    rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].color_intensity_loc, &state.title.wave_params.color_intensity, .FLOAT)
                 }
                 
                 // Set initial resolution
@@ -155,6 +177,10 @@ init_app :: proc() -> AppState {
             amplitude = 0.15,
             frequency = 6.0,
             smoothness = 0.3,
+            color_speed = 0.2,
+            color_phase = 0.0,
+            color_spread = 0.5,
+            color_intensity = 1.0,
         }
         
         rl.UnloadImage(title_img)
@@ -398,26 +424,54 @@ main :: proc() {
             // Smoothness control with R/F
             if rl.IsKeyDown(.R) do state.title.wave_params.smoothness += 0.01
             if rl.IsKeyDown(.F) do state.title.wave_params.smoothness -= 0.01
+
+            // Color speed control with T/G
+            if rl.IsKeyDown(.T) do state.title.wave_params.color_speed += 0.01
+            if rl.IsKeyDown(.G) do state.title.wave_params.color_speed -= 0.01
+
+            // Color phase control with Y/H
+            if rl.IsKeyDown(.Y) do state.title.wave_params.color_phase += 0.01
+            if rl.IsKeyDown(.H) do state.title.wave_params.color_phase -= 0.01
+
+            // Color spread control with U/J
+            if rl.IsKeyDown(.U) do state.title.wave_params.color_spread += 0.01
+            if rl.IsKeyDown(.J) do state.title.wave_params.color_spread -= 0.01
+
+            // Color intensity control with I/K
+            if rl.IsKeyDown(.I) do state.title.wave_params.color_intensity += 0.01
+            if rl.IsKeyDown(.K) do state.title.wave_params.color_intensity -= 0.01
             
             // Clamp values to reasonable ranges
             state.title.wave_params.speed = clamp(state.title.wave_params.speed, 0.01, 2.0)
             state.title.wave_params.amplitude = clamp(state.title.wave_params.amplitude, 0.01, 0.5)
             state.title.wave_params.frequency = clamp(state.title.wave_params.frequency, 0.1, 20.0)
             state.title.wave_params.smoothness = clamp(state.title.wave_params.smoothness, 0.01, 1.0)
+            state.title.wave_params.color_speed = clamp(state.title.wave_params.color_speed, 0.01, 2.0)
+            state.title.wave_params.color_phase = clamp(state.title.wave_params.color_phase, 0.0, 1.0)
+            state.title.wave_params.color_spread = clamp(state.title.wave_params.color_spread, 0.01, 2.0)
+            state.title.wave_params.color_intensity = clamp(state.title.wave_params.color_intensity, 0.1, 2.0)
             
             // Update shader uniforms
             rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_speed_loc, &state.title.wave_params.speed, .FLOAT)
             rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_amplitude_loc, &state.title.wave_params.amplitude, .FLOAT)
             rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_frequency_loc, &state.title.wave_params.frequency, .FLOAT)
             rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_smoothness_loc, &state.title.wave_params.smoothness, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].color_speed_loc, &state.title.wave_params.color_speed, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].color_phase_loc, &state.title.wave_params.color_phase, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].color_spread_loc, &state.title.wave_params.color_spread, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].color_intensity_loc, &state.title.wave_params.color_intensity, .FLOAT)
             
             if state.debug_view {
                 debug_text := fmt.tprintf(
-                    "Wave: Speed=%.2f Amp=%.2f Freq=%.2f Smooth=%.2f",
+                    "Wave: Speed=%.2f Amp=%.2f Freq=%.2f Smooth=%.2f\nColor: Speed=%.2f Phase=%.2f Spread=%.2f Int=%.2f",
                     state.title.wave_params.speed,
                     state.title.wave_params.amplitude,
                     state.title.wave_params.frequency,
                     state.title.wave_params.smoothness,
+                    state.title.wave_params.color_speed,
+                    state.title.wave_params.color_phase,
+                    state.title.wave_params.color_spread,
+                    state.title.wave_params.color_intensity,
                 )
                 rl.DrawText(strings.clone_to_cstring(debug_text), 10, 40, 10, rl.ColorAlpha(rl.WHITE, 0.5))
             }
@@ -734,6 +788,10 @@ main :: proc() {
                 {"Amplitude", state.title.wave_params.amplitude},
                 {"Frequency", state.title.wave_params.frequency},
                 {"Smoothness", state.title.wave_params.smoothness},
+                {"Color Speed", state.title.wave_params.color_speed},
+                {"Color Phase", state.title.wave_params.color_phase},
+                {"Color Spread", state.title.wave_params.color_spread},
+                {"Color Intensity", state.title.wave_params.color_intensity},
             }
             
             // Draw background panel
@@ -749,14 +807,14 @@ main :: proc() {
             rl.DrawRectangleLinesEx(panel_rect, 1, rl.ColorAlpha(rl.WHITE, 0.3))
             
             // Draw title
-            title_text := "Wave Parameters"
+            title_text := "Shader Parameters"
             title_pos_x := f32(state.window_width) - max_text_width - margin + panel_padding
             rl.DrawText(strings.clone_to_cstring(title_text), i32(title_pos_x), i32(start_y), text_size, rl.ColorAlpha(rl.WHITE, 0.8))
             
             // Draw parameters
             for param, idx in params {
                 y_pos := start_y + f32(idx + 1) * line_height
-                text := fmt.tprintf("%s: %.2f", param.name, param.value)
+                text := fmt.tprintf("%s: %.3f", param.name, param.value)
                 text_pos_x := f32(state.window_width) - max_text_width - margin + panel_padding
                 rl.DrawText(
                     strings.clone_to_cstring(text),
@@ -776,6 +834,14 @@ main :: proc() {
                     key_hint = "Ctrl + E/D"
                 } else if param.name == "Smoothness" {
                     key_hint = "Ctrl + R/F"
+                } else if param.name == "Color Speed" {
+                    key_hint = "Ctrl + T/G"
+                } else if param.name == "Color Phase" {
+                    key_hint = "Ctrl + Y/H"
+                } else if param.name == "Color Spread" {
+                    key_hint = "Ctrl + U/J"
+                } else if param.name == "Color Intensity" {
+                    key_hint = "Ctrl + I/K"
                 }
                 hint_pos_x := f32(state.window_width) - f32(rl.MeasureText(strings.clone_to_cstring(key_hint), text_size)) - margin
                 rl.DrawText(

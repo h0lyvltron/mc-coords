@@ -561,6 +561,17 @@ uniform float wave_speed = 0.3;
 uniform float wave_amplitude = 0.15;
 uniform float wave_frequency = 3.0;
 uniform float wave_smoothness = 0.3;
+uniform float color_speed = 0.2;
+uniform float color_phase = 0.0;
+uniform float color_spread = 0.5;
+uniform float color_intensity = 1.0;
+
+// Convert HSV to RGB
+vec3 hsv2rgb(vec3 c) {
+    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
 
 void main() {
     vec4 texColor = texture(texture0, fragTexCoord);
@@ -580,14 +591,18 @@ void main() {
         // Sample texture with wave offset
         vec4 waveColor = texture(texture0, waveUV);
         
-        // Add color variation based on wave position
-        vec3 tintColor = vec3(1.0 + sin(time) * 0.2, 
-                             1.0 + cos(time * 0.7) * 0.2, 
-                             1.0 + sin(time * 0.5) * 0.2);
+        // Create dynamic color based on position and time
+        float hue = fract(fragTexCoord.x * color_spread + time * color_speed + color_phase);
+        float saturation = 0.8;
+        float brightness = 0.8;
         
-        // Create stronger blend
+        // Create color from HSV parameters
+        vec3 hsv_color = vec3(hue, saturation, brightness);
+        vec3 rgb_color = hsv2rgb(hsv_color);
+        
+        // Create stronger blend with color
         float blendFactor = smoothstep(0.0, wave_smoothness, abs(waveOffset));
-        finalColor = mix(texColor, waveColor * vec4(tintColor, 1.0), blendFactor) * fragColor;
+        finalColor = mix(texColor, waveColor * vec4(rgb_color * color_intensity, 1.0), blendFactor) * fragColor;
     } else {
         finalColor = texColor * fragColor;
     }
