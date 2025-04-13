@@ -26,7 +26,7 @@ AppState :: struct {
     locations: LocationDatabase,
     settings: Settings,
     ui_state: UIState,
-    debug_view: bool,  // Toggle for debug visualization
+    debug_view: bool,  // Toggle for debug visualizations
 }
 
 TitleImage :: struct {
@@ -35,11 +35,30 @@ TitleImage :: struct {
     char_height: i32,
     chars: [10]rl.Rectangle, // 9 letters + 1 empty
     padding: f32,
+    shaders: [4]struct {
+        shader: rl.Shader,
+        time_loc: i32,
+        resolution_loc: i32,
+        blend_factor: f32,  // How much this shader contributes to the final result
+        // Wave shader parameters (only used by sine wave shader)
+        wave_speed_loc: i32,
+        wave_amplitude_loc: i32,
+        wave_frequency_loc: i32,
+        wave_smoothness_loc: i32,
+    },
     hover_state: struct {
         index: i32,
         time: f32,
         rotation: [9]f32,
         scale: [9]f32,
+        tint_color: [9]rl.Color,  // Individual tint colors for each letter
+    },
+    // Current wave parameters
+    wave_params: struct {
+        speed: f32,
+        amplitude: f32,
+        frequency: f32,
+        smoothness: f32,
     },
 }
 
@@ -92,6 +111,50 @@ init_app :: proc() -> AppState {
         for i in 0..<9 {
             state.title.hover_state.rotation[i] = 0
             state.title.hover_state.scale[i] = 1.0
+            state.title.hover_state.tint_color[i] = rl.WHITE
+        }
+        
+        // Load and initialize shaders
+        state.title.shaders[0].shader = rl.LoadShaderFromMemory(HEX_TRUCHET_VERTEX_SHADER, HEX_TRUCHET_FRAGMENT_SHADER)
+        state.title.shaders[1].shader = rl.LoadShaderFromMemory(HEX_TRUCHET_VERTEX_SHADER, RAYMARCH_FRAGMENT_SHADER)
+        state.title.shaders[2].shader = rl.LoadShaderFromMemory(RAYMARCH_VERTEX_SHADER, RAYMARCH_FRAGMENT_SHADER)
+        state.title.shaders[3].shader = rl.LoadShaderFromMemory(SINE_WAVE_VERTEX_SHADER, SINE_WAVE_FRAGMENT_SHADER)
+        
+        // Initialize all shaders
+        for i in 0..<4 {
+            if state.title.shaders[i].shader.id == 0 {
+                fmt.eprintln("Failed to load title shader", i)
+            } else {
+                // Get uniform locations
+                state.title.shaders[i].time_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "time")
+                state.title.shaders[i].resolution_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "resolution")
+                
+                // Get wave shader uniform locations (only for sine wave shader)
+                if i == 3 {  // Sine wave shader index
+                    state.title.shaders[i].wave_speed_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_speed")
+                    state.title.shaders[i].wave_amplitude_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_amplitude")
+                    state.title.shaders[i].wave_frequency_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_frequency")
+                    state.title.shaders[i].wave_smoothness_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_smoothness")
+                }
+                
+                // Set initial resolution
+                resolution := [2]f32{f32(state.window_width), f32(state.window_height)}
+                rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].resolution_loc, &resolution, .VEC2)
+                
+                // Set blend factors (adjust these values to control the mix)
+                state.title.shaders[0].blend_factor = 0.8  // Hex Truchet shader - more prominent
+                state.title.shaders[1].blend_factor = 0.6  // Raymarch shader - increased visibility
+                state.title.shaders[2].blend_factor = 0.5  // Additional raymarch shader
+                state.title.shaders[3].blend_factor = 0.4  // Sine wave shader
+            }
+        }
+        
+        // Initialize wave parameters
+        state.title.wave_params = {
+            speed = 0.3,
+            amplitude = 0.15,
+            frequency = 6.0,
+            smoothness = 0.3,
         }
         
         rl.UnloadImage(title_img)
@@ -229,10 +292,10 @@ main :: proc() {
         }
 
         // Update title hover state
-        title_scale: f32 = 1.2
+        title_scale: f32 = 1.5
         base_width := f32(state.title.char_width) * title_scale
         base_height := f32(state.title.char_height) * title_scale
-        total_width := base_width * 9  // 9 letters
+        total_width := base_width * 9 // currently 9 sprite chunks
         start_x := f32(state.window_width) / 2 - total_width / 2
         
         // Reset hover state
@@ -311,6 +374,55 @@ main :: proc() {
             rl.DrawText(strings.clone_to_cstring(debug_text), 10, 60, 10, rl.ColorAlpha(rl.WHITE, 0.5))
         }
         
+        // Update shader time
+        title_time := f32(rl.GetTime())
+        rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].time_loc, &title_time, .FLOAT)
+        rl.SetShaderValue(state.title.shaders[1].shader, state.title.shaders[1].time_loc, &title_time, .FLOAT)
+        rl.SetShaderValue(state.title.shaders[2].shader, state.title.shaders[2].time_loc, &title_time, .FLOAT)
+        rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].time_loc, &title_time, .FLOAT)
+        
+        // Update wave parameters based on keyboard input
+        if rl.IsKeyDown(.LEFT_CONTROL) {
+            // Speed control with Q/A
+            if rl.IsKeyDown(.Q) do state.title.wave_params.speed += 0.01
+            if rl.IsKeyDown(.A) do state.title.wave_params.speed -= 0.01
+            
+            // Amplitude control with W/S
+            if rl.IsKeyDown(.W) do state.title.wave_params.amplitude += 0.01
+            if rl.IsKeyDown(.S) do state.title.wave_params.amplitude -= 0.01
+            
+            // Frequency control with E/D
+            if rl.IsKeyDown(.E) do state.title.wave_params.frequency += 0.1
+            if rl.IsKeyDown(.D) do state.title.wave_params.frequency -= 0.1
+            
+            // Smoothness control with R/F
+            if rl.IsKeyDown(.R) do state.title.wave_params.smoothness += 0.01
+            if rl.IsKeyDown(.F) do state.title.wave_params.smoothness -= 0.01
+            
+            // Clamp values to reasonable ranges
+            state.title.wave_params.speed = clamp(state.title.wave_params.speed, 0.01, 2.0)
+            state.title.wave_params.amplitude = clamp(state.title.wave_params.amplitude, 0.01, 0.5)
+            state.title.wave_params.frequency = clamp(state.title.wave_params.frequency, 0.1, 20.0)
+            state.title.wave_params.smoothness = clamp(state.title.wave_params.smoothness, 0.01, 1.0)
+            
+            // Update shader uniforms
+            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_speed_loc, &state.title.wave_params.speed, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_amplitude_loc, &state.title.wave_params.amplitude, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_frequency_loc, &state.title.wave_params.frequency, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_smoothness_loc, &state.title.wave_params.smoothness, .FLOAT)
+            
+            if state.debug_view {
+                debug_text := fmt.tprintf(
+                    "Wave: Speed=%.2f Amp=%.2f Freq=%.2f Smooth=%.2f",
+                    state.title.wave_params.speed,
+                    state.title.wave_params.amplitude,
+                    state.title.wave_params.frequency,
+                    state.title.wave_params.smoothness,
+                )
+                rl.DrawText(strings.clone_to_cstring(debug_text), 10, 40, 10, rl.ColorAlpha(rl.WHITE, 0.5))
+            }
+        }
+        
         for i in 0..<9 {  // Draw 9 letters
             letter_index := i32(i + 1)  // Skip the first empty sprite
             
@@ -370,19 +482,59 @@ main :: proc() {
                 rl.DrawText(strings.clone_to_cstring(dest_debug), i32(hover_rect.x), 80, 10, rl.ColorAlpha(rl.BLUE, 0.5))
             }
             
-            // Draw the actual sprite
+            // Draw the actual sprite with multiple shaders
             origin := rl.Vector2{
-                f32(state.title.char_width)/2,  // 16 pixels (half of 32)
-                f32(state.title.char_height)/2,  // 16 pixels (half of 32)
+                f32(state.title.char_width)/2,
+                f32(state.title.char_height)/2,
             }
+            
+            // First pass: Hex Truchet shader
+            rl.BeginShaderMode(state.title.shaders[0].shader)
             rl.DrawTexturePro(
                 state.title.texture,
                 src_rect,
                 dest_rect,
                 origin,
                 state.title.hover_state.rotation[i],
-                rl.ColorAlpha(rl.WHITE, 1.0),
+                rl.ColorAlpha(state.title.hover_state.tint_color[i], state.title.shaders[0].blend_factor),
             )
+            rl.EndShaderMode()
+            
+            // Second pass: Raymarch shader
+            rl.BeginShaderMode(state.title.shaders[1].shader)
+            rl.DrawTexturePro(
+                state.title.texture,
+                src_rect,
+                dest_rect,
+                origin,
+                state.title.hover_state.rotation[i],
+                rl.ColorAlpha(state.title.hover_state.tint_color[i], state.title.shaders[1].blend_factor),
+            )
+            rl.EndShaderMode()
+            
+            // Third pass: Additional raymarch shader
+            rl.BeginShaderMode(state.title.shaders[2].shader)
+            rl.DrawTexturePro(
+                state.title.texture,
+                src_rect,
+                dest_rect,
+                origin,
+                state.title.hover_state.rotation[i],
+                rl.ColorAlpha(state.title.hover_state.tint_color[i], state.title.shaders[2].blend_factor),
+            )
+            rl.EndShaderMode()
+            
+            // Fourth pass: Sine wave shader (applied to the final result)
+            rl.BeginShaderMode(state.title.shaders[3].shader)
+            rl.DrawTexturePro(
+                state.title.texture,
+                src_rect,
+                dest_rect,
+                origin,
+                state.title.hover_state.rotation[i],
+                rl.ColorAlpha(state.title.hover_state.tint_color[i], state.title.shaders[3].blend_factor),
+            )
+            rl.EndShaderMode()
         }
         
         draw_outlined_text(state.font, "INPUT COORDINATES:", rl.Vector2{20, 95}, state.font_size, 1)
@@ -567,6 +719,72 @@ main :: proc() {
                     state.font_size,
                 }
                 rl.DrawRectangleLinesEx(feedback_bounds, 1, rl.ColorAlpha(rl.GREEN, 0.3))
+            }
+        }
+
+        if state.debug_view {
+            // Draw wave parameters debug info along right margin
+            margin := f32(20)  // Distance from right edge
+            line_height := f32(20)  // Height between lines
+            start_y := f32(100)     // Starting Y position
+            text_size := i32(16)    // Text size
+            
+            params := []struct{name: string, value: f32}{
+                {"Speed", state.title.wave_params.speed},
+                {"Amplitude", state.title.wave_params.amplitude},
+                {"Frequency", state.title.wave_params.frequency},
+                {"Smoothness", state.title.wave_params.smoothness},
+            }
+            
+            // Draw background panel
+            panel_padding := f32(10)
+            max_text_width := f32(200)  // Adjust based on your needs
+            panel_rect := rl.Rectangle{
+                f32(state.window_width) - max_text_width - margin - panel_padding,
+                start_y - panel_padding,
+                max_text_width + panel_padding * 2,
+                f32(len(params)) * line_height + panel_padding * 2,
+            }
+            rl.DrawRectangleRec(panel_rect, rl.ColorAlpha(rl.BLACK, 0.7))
+            rl.DrawRectangleLinesEx(panel_rect, 1, rl.ColorAlpha(rl.WHITE, 0.3))
+            
+            // Draw title
+            title_text := "Wave Parameters"
+            title_pos_x := f32(state.window_width) - max_text_width - margin + panel_padding
+            rl.DrawText(strings.clone_to_cstring(title_text), i32(title_pos_x), i32(start_y), text_size, rl.ColorAlpha(rl.WHITE, 0.8))
+            
+            // Draw parameters
+            for param, idx in params {
+                y_pos := start_y + f32(idx + 1) * line_height
+                text := fmt.tprintf("%s: %.2f", param.name, param.value)
+                text_pos_x := f32(state.window_width) - max_text_width - margin + panel_padding
+                rl.DrawText(
+                    strings.clone_to_cstring(text),
+                    i32(text_pos_x),
+                    i32(y_pos),
+                    text_size,
+                    rl.ColorAlpha(rl.WHITE, 0.8),
+                )
+                
+                // Draw key hints
+                key_hint := ""
+                if param.name == "Speed" {
+                    key_hint = "Ctrl + Q/A"
+                } else if param.name == "Amplitude" {
+                    key_hint = "Ctrl + W/S"
+                } else if param.name == "Frequency" {
+                    key_hint = "Ctrl + E/D"
+                } else if param.name == "Smoothness" {
+                    key_hint = "Ctrl + R/F"
+                }
+                hint_pos_x := f32(state.window_width) - f32(rl.MeasureText(strings.clone_to_cstring(key_hint), text_size)) - margin
+                rl.DrawText(
+                    strings.clone_to_cstring(key_hint),
+                    i32(hint_pos_x),
+                    i32(y_pos),
+                    text_size,
+                    rl.ColorAlpha(rl.GRAY, 0.6),
+                )
             }
         }
     }
