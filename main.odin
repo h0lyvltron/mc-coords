@@ -40,7 +40,7 @@ TitleImage :: struct {
     char_height: i32,
     chars: [10]rl.Rectangle, // 9 letters + 1 empty
     padding: f32,
-    shaders: [4]struct {
+    shaders: [5]struct {
         shader: rl.Shader,
         time_loc: i32,
         resolution_loc: i32,
@@ -55,6 +55,16 @@ TitleImage :: struct {
         color_phase_loc: i32,
         color_spread_loc: i32,
         color_intensity_loc: i32,
+        // Digital noise parameters
+        noise_scale_loc: i32,
+        glitch_intensity_loc: i32,
+        scan_line_density_loc: i32,
+        tear_frequency_loc: i32,
+        rgb_split_amount_loc: i32,
+        static_amount_loc: i32,
+        pulse_speed_loc: i32,
+        pulse_intensity_loc: i32,
+        glitch_color_loc: i32,
     },
     hover_state: struct {
         index: i32,
@@ -74,6 +84,18 @@ TitleImage :: struct {
         color_phase: f32,
         color_spread: f32,
         color_intensity: f32,
+    },
+    // Digital noise parameters
+    digital_noise_params: struct {
+        noise_scale: f32,
+        glitch_intensity: f32,
+        scan_line_density: f32,
+        tear_frequency: f32,
+        rgb_split_amount: f32,
+        static_amount: f32,
+        pulse_speed: f32,
+        pulse_intensity: f32,
+        glitch_color: [3]f32,
     },
 }
 
@@ -148,10 +170,11 @@ init_app :: proc() -> AppState {
     }
     
     // Initialize shaders
-    state.title.shaders[0].shader = rl.LoadShaderFromMemory(HEX_TRUCHET_VERTEX_SHADER, HEX_TRUCHET_FRAGMENT_SHADER)
-    state.title.shaders[1].shader = rl.LoadShaderFromMemory(HEX_TRUCHET_VERTEX_SHADER, RAYMARCH_FRAGMENT_SHADER)
-    state.title.shaders[2].shader = rl.LoadShaderFromMemory(RAYMARCH_VERTEX_SHADER, RAYMARCH_FRAGMENT_SHADER)
-    state.title.shaders[3].shader = rl.LoadShaderFromMemory(SINE_WAVE_VERTEX_SHADER, SINE_WAVE_FRAGMENT_SHADER)
+    state.title.shaders[0].shader = rl.LoadShaderFromMemory(DIGITAL_NOISE_VERTEX_SHADER, DIGITAL_NOISE_FRAGMENT_SHADER)  // Digital noise shader
+    state.title.shaders[1].shader = rl.LoadShaderFromMemory(HEX_TRUCHET_VERTEX_SHADER, HEX_TRUCHET_FRAGMENT_SHADER)
+    state.title.shaders[2].shader = rl.LoadShaderFromMemory(HEX_TRUCHET_VERTEX_SHADER, RAYMARCH_FRAGMENT_SHADER)
+    state.title.shaders[3].shader = rl.LoadShaderFromMemory(RAYMARCH_VERTEX_SHADER, RAYMARCH_FRAGMENT_SHADER)
+    state.title.shaders[4].shader = rl.LoadShaderFromMemory(SINE_WAVE_VERTEX_SHADER, SINE_WAVE_FRAGMENT_SHADER)
 
     // Check if shaders loaded successfully
     for i in 0..<4 {
@@ -162,28 +185,66 @@ init_app :: proc() -> AppState {
     }
 
     // Get shader locations
-    for i in 0..<4 {
+    for i in 0..<5 {
         state.title.shaders[i].time_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "time")
         state.title.shaders[i].resolution_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "resolution")
         
-        // Get wave shader locations
-        state.title.shaders[i].wave_speed_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_speed")
-        state.title.shaders[i].wave_amplitude_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_amplitude")
-        state.title.shaders[i].wave_frequency_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_frequency")
-        state.title.shaders[i].wave_smoothness_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_smoothness")
+        // Get digital noise shader locations for the first shader
+        if i == 0 {
+            state.title.shaders[i].noise_scale_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "noise_scale")
+            state.title.shaders[i].glitch_intensity_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "glitch_intensity")
+            state.title.shaders[i].scan_line_density_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "scan_line_density")
+            state.title.shaders[i].tear_frequency_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "tear_frequency")
+            state.title.shaders[i].rgb_split_amount_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "rgb_split_amount")
+            state.title.shaders[i].static_amount_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "static_amount")
+            state.title.shaders[i].pulse_speed_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "pulse_speed")
+            state.title.shaders[i].pulse_intensity_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "pulse_intensity")
+            state.title.shaders[i].glitch_color_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "glitch_color")
+            
+            // Set default values
+            state.title.digital_noise_params = {
+                noise_scale = 32.0,
+                glitch_intensity = 0.5,
+                scan_line_density = 2.0,
+                tear_frequency = 0.02,
+                rgb_split_amount = 0.002,
+                static_amount = 0.1,
+                pulse_speed = 3.0,
+                pulse_intensity = 0.1,
+                glitch_color = {1.1, 1.0, 1.2},  // Slight purple tint
+            }
+            
+            // Apply parameters
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].noise_scale_loc, &state.title.digital_noise_params.noise_scale, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].glitch_intensity_loc, &state.title.digital_noise_params.glitch_intensity, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].scan_line_density_loc, &state.title.digital_noise_params.scan_line_density, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].tear_frequency_loc, &state.title.digital_noise_params.tear_frequency, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].rgb_split_amount_loc, &state.title.digital_noise_params.rgb_split_amount, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].static_amount_loc, &state.title.digital_noise_params.static_amount, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].pulse_speed_loc, &state.title.digital_noise_params.pulse_speed, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].pulse_intensity_loc, &state.title.digital_noise_params.pulse_intensity, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].glitch_color_loc, &state.title.digital_noise_params.glitch_color[0], .VEC3)
+        }
         
-        // Get color shader locations
-        state.title.shaders[i].color_speed_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_speed")
-        state.title.shaders[i].color_phase_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_phase")
-        state.title.shaders[i].color_spread_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_spread")
-        state.title.shaders[i].color_intensity_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_intensity")
+        // Get wave shader locations only for the sine wave shader (index 4)
+        if i == 4 {
+            state.title.shaders[i].wave_speed_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_speed")
+            state.title.shaders[i].wave_amplitude_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_amplitude")
+            state.title.shaders[i].wave_frequency_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_frequency")
+            state.title.shaders[i].wave_smoothness_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_smoothness")
+            state.title.shaders[i].color_speed_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_speed")
+            state.title.shaders[i].color_phase_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_phase")
+            state.title.shaders[i].color_spread_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_spread")
+            state.title.shaders[i].color_intensity_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_intensity")
+        }
     }
 
     // Set blend factors
-    state.title.shaders[0].blend_factor = 0.8  // Hex Truchet shader - more prominent
-    state.title.shaders[1].blend_factor = 0.6  // Raymarch shader - increased visibility
-    state.title.shaders[2].blend_factor = 0.5  // Additional raymarch shader
-    state.title.shaders[3].blend_factor = 0.4  // Sine wave shader
+    state.title.shaders[0].blend_factor = 1.0  // Digital noise shader - reduced for subtle glitch effect
+    state.title.shaders[1].blend_factor = 0.5  // Hex Truchet shader - medium contribution
+    state.title.shaders[2].blend_factor = 0.3  // Raymarch shader - reduced for subtle depth
+    state.title.shaders[3].blend_factor = 0.3  // Additional raymarch shader - medium contribution
+    state.title.shaders[4].blend_factor = 0.2  // Sine wave shader - reduced for subtle movement
 
     // Set initial shader values
     resolution := [2]f32{f32(state.window_width), f32(state.window_height)}
@@ -192,7 +253,7 @@ init_app :: proc() -> AppState {
     }
 
     // Apply shader parameters from loaded state
-    shader := &state.title.shaders[3]  // Sine wave shader
+    shader := &state.title.shaders[4]  // Sine wave shader
     rl.SetShaderValue(shader.shader, shader.wave_speed_loc, &state.title.wave_params.speed, .FLOAT)
     rl.SetShaderValue(shader.shader, shader.wave_amplitude_loc, &state.title.wave_params.amplitude, .FLOAT)
     rl.SetShaderValue(shader.shader, shader.wave_frequency_loc, &state.title.wave_params.frequency, .FLOAT)
@@ -246,6 +307,24 @@ main :: proc() {
         rl.UnloadFont(state.font)
         rl.UnloadTexture(state.title.texture)
         delete(state.input.key_states)
+        
+        // Clean up shaders
+        for i in 0..<len(state.title.shaders) {
+            if state.title.shaders[i].shader.id != 0 {
+                rl.UnloadShader(state.title.shaders[i].shader)
+            }
+        }
+        
+        // Clean up background shader
+        if state.background.shader.id != 0 {
+            rl.UnloadShader(state.background.shader)
+        }
+        if state.background.texture.id != 0 {
+            rl.UnloadTexture(state.background.texture)
+        }
+        
+        // Clean up locations array
+        delete(state.locations.locations)
     }
     
     layout := DEFAULT_LAYOUT
@@ -428,6 +507,7 @@ main :: proc() {
         rl.SetShaderValue(state.title.shaders[1].shader, state.title.shaders[1].time_loc, &title_time, .FLOAT)
         rl.SetShaderValue(state.title.shaders[2].shader, state.title.shaders[2].time_loc, &title_time, .FLOAT)
         rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].time_loc, &title_time, .FLOAT)
+        rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].time_loc, &title_time, .FLOAT)  // Add time update for sine wave shader
         
         // Update wave parameters based on keyboard input
         if rl.IsKeyDown(.LEFT_CONTROL) && !rl.IsKeyDown(.LEFT_SHIFT) {
@@ -507,14 +587,14 @@ main :: proc() {
             state.title.wave_params.color_intensity = clamp(state.title.wave_params.color_intensity, 0.1, 2.0)
             
             // Update shader uniforms
-            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_speed_loc, &state.title.wave_params.speed, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_amplitude_loc, &state.title.wave_params.amplitude, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_frequency_loc, &state.title.wave_params.frequency, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].wave_smoothness_loc, &state.title.wave_params.smoothness, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].color_speed_loc, &state.title.wave_params.color_speed, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].color_phase_loc, &state.title.wave_params.color_phase, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].color_spread_loc, &state.title.wave_params.color_spread, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].color_intensity_loc, &state.title.wave_params.color_intensity, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].wave_speed_loc, &state.title.wave_params.speed, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].wave_amplitude_loc, &state.title.wave_params.amplitude, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].wave_frequency_loc, &state.title.wave_params.frequency, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].wave_smoothness_loc, &state.title.wave_params.smoothness, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].color_speed_loc, &state.title.wave_params.color_speed, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].color_phase_loc, &state.title.wave_params.color_phase, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].color_spread_loc, &state.title.wave_params.color_spread, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].color_intensity_loc, &state.title.wave_params.color_intensity, .FLOAT)
             
             if state.debug_view {
                 debug_text := fmt.tprintf(
@@ -642,6 +722,18 @@ main :: proc() {
                 origin,
                 state.title.hover_state.rotation[i],
                 rl.ColorAlpha(state.title.hover_state.tint_color[i], state.title.shaders[3].blend_factor),
+            )
+            rl.EndShaderMode()
+
+            // Fifth pass: Additional sine wave shader for enhanced effect
+            rl.BeginShaderMode(state.title.shaders[4].shader)
+            rl.DrawTexturePro(
+                state.title.texture,
+                src_rect,
+                dest_rect,
+                origin,
+                state.title.hover_state.rotation[i],
+                rl.ColorAlpha(state.title.hover_state.tint_color[i], state.title.shaders[4].blend_factor),
             )
             rl.EndShaderMode()
         }
@@ -783,32 +875,24 @@ main :: proc() {
             )
         }
         
-        coord_text := fmt.tprintf("X: %d, Z: %d", state.coordinates.converted.x, state.coordinates.converted.z)
+        // Create reusable buffers for text
+        coord_buffer: [32]u8
+        feedback_buffer: [32]u8
+        
+        // Convert coordinates to string
+        coord_text := fmt.bprintf(coord_buffer[:], "X: %d, Z: %d", 
+            state.coordinates.converted.x, state.coordinates.converted.z)
         
         draw_outlined_text(
             state.font,
             strings.clone_to_cstring(coord_text),
             converted_pos,
-            state.font_size * 1.2,  // 20% larger font
+            state.font_size * 1.2,
             1,
-            1,  // Outline thickness
         )
-        
-        // Debug visualization for converted coordinates
-        if state.debug_view {
-            rl.DrawRectangleLinesEx(converted_rect, 1, rl.ColorAlpha(rl.RED, 0.3))
-            debug_info := fmt.tprintf("hover:%v copy_time:%.1f", state.clipboard.hovered, state.clipboard.last_copied)
-            rl.DrawText(
-                strings.clone_to_cstring(debug_info),
-                i32(converted_rect.x),
-                i32(converted_rect.y - 12),
-                10,
-                rl.ColorAlpha(rl.WHITE, 0.5),
-            )
-        }
 
         if state.clipboard.last_copied > 0 {
-            feedback_text := "Copied!"
+            feedback_text := fmt.bprintf(feedback_buffer[:], "Copied!")
             feedback_pos := rl.Vector2{converted_pos.x + 200, converted_pos.y}
             rl.DrawTextEx(
                 state.font,
@@ -818,17 +902,6 @@ main :: proc() {
                 1,
                 rl.GREEN,
             )
-            
-            // Debug visualization for copy feedback
-            if state.debug_view {
-                feedback_bounds := rl.Rectangle{
-                    feedback_pos.x,
-                    feedback_pos.y,
-                    70,  // Approximate text width
-                    state.font_size,
-                }
-                rl.DrawRectangleLinesEx(feedback_bounds, 1, rl.ColorAlpha(rl.GREEN, 0.3))
-            }
         }
 
         if state.debug_view {
@@ -955,6 +1028,30 @@ main :: proc() {
                     }
                 }
             }
+        }
+
+        // Debug visualization
+        if state.debug_view {
+            // Create a single reusable buffer for all debug text
+            debug_text: [256]u8
+            
+            // Title debug info
+            title_text := fmt.bprintf(debug_text[:], "Title Texture: %dx%d", 
+                state.title.texture.width, state.title.texture.height)
+            rl.DrawText(strings.clone_to_cstring(title_text), 10, 10, 20, rl.RED)
+            
+            // Input section debug info
+            input_text := fmt.bprintf(debug_text[:], "Input: %s", 
+                state.input.active_input == .X ? "X" : state.input.active_input == .Z ? "Z" : "None")
+            rl.DrawText(strings.clone_to_cstring(input_text), 10, 40, 20, rl.RED)
+            
+            // Wave parameters debug info
+            wave_text := fmt.bprintf(debug_text[:], "Wave: speed=%.2f amp=%.2f freq=%.2f smooth=%.2f", 
+                state.title.wave_params.speed,
+                state.title.wave_params.amplitude,
+                state.title.wave_params.frequency,
+                state.title.wave_params.smoothness)
+            rl.DrawText(strings.clone_to_cstring(wave_text), 10, 70, 20, rl.RED)
         }
     }
 

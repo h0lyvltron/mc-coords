@@ -1,5 +1,122 @@
 package main
 
+DIGITAL_NOISE_VERTEX_SHADER :: `
+#version 330
+
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+in vec4 vertexColor;
+
+out vec2 fragTexCoord;
+out vec4 fragColor;
+
+uniform mat4 mvp;
+
+void main() {
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+    gl_Position = mvp * vec4(vertexPosition, 1.0);
+}
+`
+
+DIGITAL_NOISE_FRAGMENT_SHADER :: `
+#version 330
+
+in vec2 fragTexCoord;
+in vec4 fragColor;
+
+out vec4 finalColor;
+
+uniform sampler2D texture0;
+uniform float time;
+uniform vec2 resolution;
+
+// Digital noise parameters
+uniform float noise_scale;         // Scale of the noise pattern
+uniform float glitch_intensity;    // Overall intensity of the glitch effect
+uniform float scan_line_density;   // Density of scanlines
+uniform float tear_frequency;      // Frequency of tear lines
+uniform float rgb_split_amount;    // Amount of RGB color splitting
+uniform float static_amount;       // Amount of static noise
+uniform float pulse_speed;         // Speed of pulsing effect
+uniform float pulse_intensity;     // Intensity of pulse
+uniform vec3 glitch_color;         // Color tint for glitch effects
+
+// Hash function for pseudo-random numbers
+float hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(443.897, 441.423, 437.195));
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Improved noise function
+float improvedNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f); // Smoother interpolation
+    
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Digital noise effect
+float digitalNoise(vec2 uv, float t) {
+    // Scale UV based on noise_scale
+    vec2 scaledUV = uv * noise_scale;
+    
+    // Create block pattern
+    vec2 block = floor(scaledUV);
+    
+    // Generate base noise
+    float noise = improvedNoise(block + floor(t * 8.0));
+    
+    // Create scanlines with configurable density
+    float scanline = step(0.5, fract(uv.y * resolution.y * scan_line_density));
+    
+    // Create tear lines with configurable frequency
+    float tearLine = step(1.0 - tear_frequency, hash(vec2(block.y + t * 5.0, t)));
+    
+    // Add pulsing effect
+    float pulse = sin(t * pulse_speed) * pulse_intensity;
+    
+    // Combine effects
+    float glitch = noise * glitch_intensity;
+    float staticNoise = hash(uv + t) * static_amount;
+    
+    return (glitch + staticNoise) * scanline + tearLine + pulse;
+}
+
+void main() {
+    vec2 uv = fragTexCoord;
+    vec4 texColor = texture(texture0, uv);
+    
+    // Only apply effects to non-transparent pixels
+    if (texColor.a > 0.1) {
+        float noise = digitalNoise(uv, time);
+        
+        // RGB split effect with configurable amount
+        vec4 colorR = texture(texture0, uv + vec2(rgb_split_amount * noise, 0.0));
+        vec4 colorB = texture(texture0, uv - vec2(rgb_split_amount * noise, 0.0));
+        
+        texColor.r = mix(texColor.r, colorR.r, glitch_intensity);
+        texColor.b = mix(texColor.b, colorB.b, glitch_intensity);
+        
+        // Add noise to alpha
+        texColor.a = mix(texColor.a, texColor.a * (0.95 + noise * 0.1), glitch_intensity);
+        
+        // Apply glitch color tinting
+        vec3 tint = glitch_color + vec3(noise * 0.2);
+        texColor.rgb = mix(texColor.rgb, texColor.rgb * tint, glitch_intensity);
+    }
+    
+    finalColor = texColor * fragColor;
+}
+`
+
 BACKGROUND_VERTEX_SHADER :: `
 #version 330
 

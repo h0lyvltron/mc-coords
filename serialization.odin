@@ -34,6 +34,16 @@ SerializedState :: struct {
         color_phase: f32,
         color_spread: f32,
         color_intensity: f32,
+        // Digital noise parameters
+        noise_scale: f32,
+        glitch_intensity: f32,
+        scan_line_density: f32,
+        tear_frequency: f32,
+        rgb_split_amount: f32,
+        static_amount: f32,
+        pulse_speed: f32,
+        pulse_intensity: f32,
+        glitch_color: [3]f32,
     },
 }
 
@@ -98,10 +108,12 @@ load_state :: proc(state: ^AppState) -> (ok: bool) {
     // Trigger conversion
     state.coordinates.needs_conversion = true
     
-    // Clear existing locations and copy new ones
-    clear(&state.locations.locations)
-    for loc in serial_state.locations {
-        append(&state.locations.locations, loc)
+    // Load locations
+    if len(serial_state.locations) > 0 {
+        state.locations.locations = make([dynamic]Location, len(serial_state.locations))
+        for location, i in serial_state.locations {
+            state.locations.locations[i] = location
+        }
     }
 
     // Update shader parameters
@@ -113,6 +125,17 @@ load_state :: proc(state: ^AppState) -> (ok: bool) {
     state.title.wave_params.color_phase = serial_state.shader_params.color_phase
     state.title.wave_params.color_spread = serial_state.shader_params.color_spread
     state.title.wave_params.color_intensity = serial_state.shader_params.color_intensity
+
+    // Load digital noise parameters
+    state.title.digital_noise_params.noise_scale = serial_state.shader_params.noise_scale
+    state.title.digital_noise_params.glitch_intensity = serial_state.shader_params.glitch_intensity
+    state.title.digital_noise_params.scan_line_density = serial_state.shader_params.scan_line_density
+    state.title.digital_noise_params.tear_frequency = serial_state.shader_params.tear_frequency
+    state.title.digital_noise_params.rgb_split_amount = serial_state.shader_params.rgb_split_amount
+    state.title.digital_noise_params.static_amount = serial_state.shader_params.static_amount
+    state.title.digital_noise_params.pulse_speed = serial_state.shader_params.pulse_speed
+    state.title.digital_noise_params.pulse_intensity = serial_state.shader_params.pulse_intensity
+    state.title.digital_noise_params.glitch_color = serial_state.shader_params.glitch_color
 
     // Only update shader uniforms if shaders are initialized
     if state.title.shaders[3].shader.id != 0 {
@@ -127,6 +150,20 @@ load_state :: proc(state: ^AppState) -> (ok: bool) {
         rl.SetShaderValue(shader.shader, shader.color_intensity_loc, &state.title.wave_params.color_intensity, .FLOAT)
     } else {
         fmt.println("* Shaders not initialized yet - parameters will be applied when shaders are loaded")
+    }
+
+    // Apply digital noise parameters to shader
+    if state.title.shaders[0].shader.id != 0 {
+        shader := &state.title.shaders[0]  // Digital noise shader
+        rl.SetShaderValue(shader.shader, shader.noise_scale_loc, &state.title.digital_noise_params.noise_scale, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.glitch_intensity_loc, &state.title.digital_noise_params.glitch_intensity, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.scan_line_density_loc, &state.title.digital_noise_params.scan_line_density, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.tear_frequency_loc, &state.title.digital_noise_params.tear_frequency, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.rgb_split_amount_loc, &state.title.digital_noise_params.rgb_split_amount, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.static_amount_loc, &state.title.digital_noise_params.static_amount, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.pulse_speed_loc, &state.title.digital_noise_params.pulse_speed, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.pulse_intensity_loc, &state.title.digital_noise_params.pulse_intensity, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.glitch_color_loc, &state.title.digital_noise_params.glitch_color[0], .VEC3)
     }
 
     fmt.println("* State loaded successfully")
@@ -169,8 +206,29 @@ save_state_temp :: proc(state: ^AppState) -> bool {
                 color_phase = state.title.wave_params.color_phase,
                 color_spread = state.title.wave_params.color_spread,
                 color_intensity = state.title.wave_params.color_intensity,
+                // Digital noise parameters
+                noise_scale = state.title.digital_noise_params.noise_scale,
+                glitch_intensity = state.title.digital_noise_params.glitch_intensity,
+                scan_line_density = state.title.digital_noise_params.scan_line_density,
+                tear_frequency = state.title.digital_noise_params.tear_frequency,
+                rgb_split_amount = state.title.digital_noise_params.rgb_split_amount,
+                static_amount = state.title.digital_noise_params.static_amount,
+                pulse_speed = state.title.digital_noise_params.pulse_speed,
+                pulse_intensity = state.title.digital_noise_params.pulse_intensity,
+                glitch_color = state.title.digital_noise_params.glitch_color,
             },
         }
+        
+        // Save digital noise parameters
+        serial_state.shader_params.noise_scale = state.title.digital_noise_params.noise_scale
+        serial_state.shader_params.glitch_intensity = state.title.digital_noise_params.glitch_intensity
+        serial_state.shader_params.scan_line_density = state.title.digital_noise_params.scan_line_density
+        serial_state.shader_params.tear_frequency = state.title.digital_noise_params.tear_frequency
+        serial_state.shader_params.rgb_split_amount = state.title.digital_noise_params.rgb_split_amount
+        serial_state.shader_params.static_amount = state.title.digital_noise_params.static_amount
+        serial_state.shader_params.pulse_speed = state.title.digital_noise_params.pulse_speed
+        serial_state.shader_params.pulse_intensity = state.title.digital_noise_params.pulse_intensity
+        serial_state.shader_params.glitch_color = state.title.digital_noise_params.glitch_color
         
         // Convert to JSON
         data, marshal_err := json.marshal(serial_state)
@@ -223,8 +281,29 @@ save_state_temp :: proc(state: ^AppState) -> bool {
             color_phase = state.title.wave_params.color_phase,
             color_spread = state.title.wave_params.color_spread,
             color_intensity = state.title.wave_params.color_intensity,
+            // Digital noise parameters
+            noise_scale = state.title.digital_noise_params.noise_scale,
+            glitch_intensity = state.title.digital_noise_params.glitch_intensity,
+            scan_line_density = state.title.digital_noise_params.scan_line_density,
+            tear_frequency = state.title.digital_noise_params.tear_frequency,
+            rgb_split_amount = state.title.digital_noise_params.rgb_split_amount,
+            static_amount = state.title.digital_noise_params.static_amount,
+            pulse_speed = state.title.digital_noise_params.pulse_speed,
+            pulse_intensity = state.title.digital_noise_params.pulse_intensity,
+            glitch_color = state.title.digital_noise_params.glitch_color,
         },
     }
+
+    // Save digital noise parameters
+    serial_state.shader_params.noise_scale = state.title.digital_noise_params.noise_scale
+    serial_state.shader_params.glitch_intensity = state.title.digital_noise_params.glitch_intensity
+    serial_state.shader_params.scan_line_density = state.title.digital_noise_params.scan_line_density
+    serial_state.shader_params.tear_frequency = state.title.digital_noise_params.tear_frequency
+    serial_state.shader_params.rgb_split_amount = state.title.digital_noise_params.rgb_split_amount
+    serial_state.shader_params.static_amount = state.title.digital_noise_params.static_amount
+    serial_state.shader_params.pulse_speed = state.title.digital_noise_params.pulse_speed
+    serial_state.shader_params.pulse_intensity = state.title.digital_noise_params.pulse_intensity
+    serial_state.shader_params.glitch_color = state.title.digital_noise_params.glitch_color
 
     // Convert to JSON
     data, marshal_err := json.marshal(serial_state)
