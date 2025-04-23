@@ -17,6 +17,14 @@ SerializationError :: enum {
     ValidationError,
 }
 
+// SerializedLocation represents a location for serialization
+SerializedLocation :: struct {
+    name: string,
+    x: int,
+    z: int,
+    dimension: Dimension,
+}
+
 // SerializedState represents the data we want to save/load
 SerializedState :: struct {
     coordinates: struct {
@@ -24,7 +32,7 @@ SerializedState :: struct {
         input_z: int,
         dimension: Dimension,
     },
-    locations: []Location,
+    locations: []SerializedLocation,
     shader_params: struct {
         // Digital noise parameters
         noise_scale: f32,
@@ -108,9 +116,23 @@ load_state :: proc(state: ^AppState) -> (ok: bool) {
     
     // Load locations
     if len(serial_state.locations) > 0 {
-        state.locations.locations = make([dynamic]Location, len(serial_state.locations))
-        for location, i in serial_state.locations {
-            state.locations.locations[i] = location
+        // Clear existing locations
+        if len(state.locations.locations) > 0 {
+            for location in state.locations.locations {
+                delete(location.name)
+            }
+            clear(&state.locations.locations)
+        }
+        
+        // Load new locations
+        for serialized_loc in serial_state.locations {
+            location := Location{
+                name = strings.clone(serialized_loc.name),
+                x = serialized_loc.x,
+                z = serialized_loc.z,
+                dimension = serialized_loc.dimension,
+            }
+            append(&state.locations.locations, location)
         }
     }
 
@@ -175,6 +197,19 @@ save_state_temp :: proc(state: ^AppState) -> bool {
         z_val := state.coordinates.converted.z
         fmt.println("* Debug: Using converted coordinates:", x_val, z_val)
         
+        // Create serialized locations
+        serialized_locations := make([]SerializedLocation, len(state.locations.locations))
+        defer delete(serialized_locations)
+        
+        for location, i in state.locations.locations {
+            serialized_locations[i] = SerializedLocation{
+                name = location.name,
+                x = location.x,
+                z = location.z,
+                dimension = location.dimension,
+            }
+        }
+        
         // Create serialized state from app state
         serial_state := SerializedState{
             coordinates = {
@@ -182,7 +217,7 @@ save_state_temp :: proc(state: ^AppState) -> bool {
                 input_z = z_val,
                 dimension = state.coordinates.source_dimension,
             },
-            locations = state.locations.locations[:],
+            locations = serialized_locations,
             shader_params = {
                 // Digital noise parameters
                 noise_scale = state.title.digital_noise_params.noise_scale,
@@ -248,6 +283,19 @@ save_state_temp :: proc(state: ^AppState) -> bool {
     
     fmt.println("* Debug: Successfully parsed coordinates:", x_val, z_val)
     
+    // Create serialized locations
+    serialized_locations := make([]SerializedLocation, len(state.locations.locations))
+    defer delete(serialized_locations)
+    
+    for location, i in state.locations.locations {
+        serialized_locations[i] = SerializedLocation{
+            name = location.name,
+            x = location.x,
+            z = location.z,
+            dimension = location.dimension,
+        }
+    }
+    
     // Create serialized state from app state
     serial_state := SerializedState{
         coordinates = {
@@ -255,7 +303,7 @@ save_state_temp :: proc(state: ^AppState) -> bool {
             input_z = z_val,
             dimension = state.coordinates.source_dimension,
         },
-        locations = state.locations.locations[:],
+        locations = serialized_locations,
         shader_params = {
             // Digital noise parameters
             noise_scale = state.title.digital_noise_params.noise_scale,

@@ -638,7 +638,7 @@ main :: proc() {
         if state.input.needs_dimension_toggle {
             state.coordinates.source_dimension = state.coordinates.source_dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
             state.coordinates.needs_conversion = true
-            state.input.needs_dimension_toggle = false
+            state.state_tracking.has_unsaved_changes = true
         }
 
         // Update converted coordinates position based on section scroll
@@ -1283,6 +1283,436 @@ main :: proc() {
 
         // Update clipboard hover state
         state.clipboard.hovered = rl.CheckCollisionPointRec(mouse_pos, converted_coords.rect)
+
+        // Draw locations section - position it below the coordinate conversion section
+        locations_header_y := converted_coords.rect.y + converted_coords.rect.height + 2*state.layout.section_spacing
+        draw_outlined_text(state.font, "SAVED LOCATIONS:", rl.Vector2{20, locations_header_y}, state.font_size, 1)
+
+        // Define list width to be responsive to window size
+        locations_list_width := f32(state.window_width) - 2*state.layout.margin
+
+        // Header section with search and add button
+        header_rect := rl.Rectangle{
+            x = state.layout.margin,
+            y = locations_header_y + state.layout.spacing,
+            width = locations_list_width,
+            height = 40,
+        }
+        rl.DrawRectangleRec(header_rect, rl.ColorAlpha(rl.BLACK, 0.5))
+        rl.DrawRectangleLinesEx(header_rect, 2, rl.ColorAlpha(rl.WHITE, 0.5))
+
+        // Draw search box
+        search_box_rect := rl.Rectangle{
+            x = header_rect.x + 10,
+            y = header_rect.y + 5,
+            width = header_rect.width - 90,
+            height = 30,
+        }
+        rl.DrawRectangleRec(
+            search_box_rect,
+            rl.ColorAlpha(state.input.active_input == .LocationSearch ? rl.BLUE : rl.DARKGRAY, 0.5),
+        )
+        draw_outlined_text(
+            state.font,
+            strings.clone_to_cstring(string(state.input.input_buffers[2][:])),
+            rl.Vector2{search_box_rect.x + 5, search_box_rect.y + 5},
+            state.font_size,
+            1,
+        )
+
+        // Draw add button
+        add_button_rect := rl.Rectangle{
+            x = header_rect.x + header_rect.width - 70,
+            y = header_rect.y + 5,
+            width = 60,
+            height = 30,
+        }
+        rl.DrawRectangleRec(add_button_rect, rl.ColorAlpha(rl.GREEN, 0.5))
+        add_text := "Add"
+        add_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(add_text), state.font_size, 1)
+        draw_outlined_text(
+            state.font,
+            strings.clone_to_cstring(add_text),
+            rl.Vector2{add_button_rect.x + add_button_rect.width/2 - add_size.x/2, add_button_rect.y + 5},
+            state.font_size,
+            1,
+        )
+
+        // Locations list
+        list_start_y := header_rect.y + header_rect.height + 5
+        list_height := f32(state.window_height - i32(list_start_y) - 20)
+        locations_list := UIElement{
+            rect = rl.Rectangle{
+                x = state.layout.margin,
+                y = list_start_y,
+                width = locations_list_width,
+                height = list_height,
+            },
+        }
+        rl.DrawRectangleRec(locations_list.rect, rl.ColorAlpha(rl.DARKGRAY, 0.3))
+
+        // Draw locations
+        item_height := f32(80)  // Increased height for description and tags
+        content_x := locations_list.rect.x + 10
+        content_width := locations_list.rect.width - 20
+
+        for location, i in state.locations.locations {
+            if state.locations.current_filter != "" && 
+               !strings.contains_any(strings.to_lower(location.name), strings.to_lower(state.locations.current_filter)) {
+                continue
+            }
+
+            item_y := list_start_y + f32(i) * item_height
+            item_rect := rl.Rectangle{content_x, item_y, content_width, item_height}
+
+            // Draw selection highlight
+            if i == state.locations.selected_index {
+                rl.DrawRectangleRec(item_rect, rl.ColorAlpha(rl.BLUE, 0.3))
+            }
+
+            // Draw location name
+            name_pos := rl.Vector2{content_x + 5, item_y + 5}
+            draw_outlined_text(state.font, strings.clone_to_cstring(location.name), name_pos, state.font_size, 1)
+
+            // Draw coordinates and world
+            coords := fmt.tprintf("%d, %d (%v) - %s", location.x, location.z, location.dimension, location.world)
+            coords_pos := rl.Vector2{content_x + 5, item_y + 25}
+            draw_outlined_text(state.font, strings.clone_to_cstring(coords), coords_pos, state.font_size * 0.8, 1)
+
+            // Draw description (if any)
+            if len(location.description) > 0 {
+                desc_pos := rl.Vector2{content_x + 5, item_y + 45}
+                draw_outlined_text(
+                    state.font,
+                    strings.clone_to_cstring(location.description),
+                    desc_pos,
+                    state.font_size * 0.8,
+                    1,
+                )
+            }
+
+            // Draw tags (if any)
+            if len(location.tags) > 0 {
+                tags_str := fmt.tprintf("Tags: %s", strings.join(location.tags[:], ", "))
+                tags_pos := rl.Vector2{content_x + 5, item_y + 65}
+                draw_outlined_text(
+                    state.font,
+                    strings.clone_to_cstring(tags_str),
+                    tags_pos,
+                    state.font_size * 0.7,
+                    1,
+                )
+            }
+
+            // Draw separator line
+            line_y := item_y + item_height - 1
+            rl.DrawLineEx(
+                rl.Vector2{content_x, line_y},
+                rl.Vector2{content_x + content_width, line_y},
+                1,
+                rl.ColorAlpha(rl.WHITE, 0.3),
+            )
+        }
+
+        // Handle location list interactions
+        if rl.IsMouseButtonPressed(.LEFT) {
+            // Check for add button click
+            if rl.CheckCollisionPointRec(mouse_pos, add_button_rect) {
+                // Clear location input buffers
+                for i in 0..<len(state.input.location_input.name) do state.input.location_input.name[i] = 0
+                for i in 0..<len(state.input.location_input.world) do state.input.location_input.world[i] = 0
+                for i in 0..<len(state.input.location_input.description) do state.input.location_input.description[i] = 0
+                for i in 0..<len(state.input.location_input.tags) do state.input.location_input.tags[i] = 0
+                
+                // Pre-fill with default name
+                default_name := fmt.tprintf("Location %d", len(state.locations.locations) + 1)
+                for i := 0; i < min(len(default_name), len(state.input.location_input.name)-1); i += 1 {
+                    state.input.location_input.name[i] = default_name[i]
+                }
+                
+                state.input.active_input = .LocationName
+                state.input.should_clear = true
+            }
+            
+            // Check for search box click
+            if rl.CheckCollisionPointRec(mouse_pos, search_box_rect) {
+                state.input.active_input = .LocationSearch
+                state.input.should_clear = true
+            }
+            
+            // Check for location item click
+            if rl.CheckCollisionPointRec(mouse_pos, locations_list.rect) {
+                mouse_y := mouse_pos.y - list_start_y
+                clicked_index := int(mouse_y / item_height)
+                if clicked_index >= 0 && clicked_index < len(state.locations.locations) {
+                    state.locations.selected_index = clicked_index
+                }
+            }
+        }
+
+        // Handle ESC key - first check if we're in a popup or active input
+        if rl.IsKeyPressed(.ESCAPE) {
+            if state.input.active_input == .LocationName || 
+               state.input.active_input == .LocationWorld || 
+               state.input.active_input == .LocationDescription || 
+               state.input.active_input == .LocationTags {
+                // Reset popup state and clear all location input buffers
+                state.input.active_input = .None
+                for i in 0..<len(state.input.location_input.name) do state.input.location_input.name[i] = 0
+                for i in 0..<len(state.input.location_input.world) do state.input.location_input.world[i] = 0
+                for i in 0..<len(state.input.location_input.description) do state.input.location_input.description[i] = 0
+                for i in 0..<len(state.input.location_input.tags) do state.input.location_input.tags[i] = 0
+            } else if state.input.active_input == .LocationSearch {
+                state.input.active_input = .None
+                state.locations.current_filter = ""
+            } else if state.input.active_input != .None {
+                state.input.active_input = .None
+            } else {
+                rl.CloseWindow()
+            }
+            return  // Don't process any other input this frame
+        }
+
+        // Handle TAB key for input field navigation
+        if rl.IsKeyPressed(.TAB) {
+            shift_held := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+            
+            if state.input.active_input == .LocationName || 
+               state.input.active_input == .LocationWorld || 
+               state.input.active_input == .LocationDescription || 
+               state.input.active_input == .LocationTags {
+                // Handle tabbing in location input popup
+                if shift_held {
+                    #partial switch state.input.active_input {
+                        case .LocationName:
+                            state.input.active_input = .LocationTags
+                        case .LocationWorld:
+                            state.input.active_input = .LocationName
+                        case .LocationDescription:
+                            state.input.active_input = .LocationWorld
+                        case .LocationTags:
+                            state.input.active_input = .LocationDescription
+                    }
+                } else {
+                    #partial switch state.input.active_input {
+                        case .LocationName:
+                            state.input.active_input = .LocationWorld
+                        case .LocationWorld:
+                            state.input.active_input = .LocationDescription
+                        case .LocationDescription:
+                            state.input.active_input = .LocationTags
+                        case .LocationTags:
+                            state.input.active_input = .LocationName
+                    }
+                }
+            } else {
+                // Handle tabbing in main window
+                if shift_held {
+                    #partial switch state.input.active_input {
+                        case .X:
+                            state.input.active_input = .LocationSearch
+                        case .Z:
+                            state.input.active_input = .X
+                        case .Dimension:
+                            state.input.active_input = .Z
+                        case .LocationSearch:
+                            state.input.active_input = .Dimension
+                        case .None:
+                            state.input.active_input = .LocationSearch
+                    }
+                } else {
+                    #partial switch state.input.active_input {
+                        case .X:
+                            state.input.active_input = .Z
+                        case .Z:
+                            state.input.active_input = .Dimension
+                        case .Dimension:
+                            state.input.active_input = .LocationSearch
+                        case .LocationSearch:
+                            state.input.active_input = .X
+                        case .None:
+                            state.input.active_input = .X
+                    }
+                }
+                if state.input.active_input == .X || state.input.active_input == .Z {
+                    state.input.should_clear = true
+                }
+            }
+        }
+
+        // Handle dimension cycling with arrow keys
+        if state.input.active_input == .Dimension || state.input.active_input == .None {
+            if rl.IsKeyPressed(.RIGHT) || rl.IsKeyPressed(.LEFT) {
+                state.coordinates.source_dimension = state.coordinates.source_dimension == .Overworld ? .Nether : .Overworld
+                state.coordinates.needs_conversion = true
+                state.state_tracking.has_unsaved_changes = true
+            }
+        }
+
+        // Handle text input for location popup
+        if state.input.active_input == .LocationName || 
+           state.input.active_input == .LocationWorld || 
+           state.input.active_input == .LocationDescription || 
+           state.input.active_input == .LocationTags {
+            
+            // Text input is now handled in the input state update
+            // Just draw the dialog and handle mouse/key navigation
+            
+            dialog_width := f32(400)
+            dialog_height := f32(300)
+            dialog_x := f32(state.window_width)/2 - dialog_width/2
+            dialog_y := f32(state.window_height)/2 - dialog_height/2
+            
+            // Draw semi-transparent overlay
+            rl.DrawRectangle(0, 0, state.window_width, state.window_height, rl.ColorAlpha(rl.BLACK, 0.5))
+            
+            // Draw dialog background
+            dialog_rect := rl.Rectangle{dialog_x, dialog_y, dialog_width, dialog_height}
+            rl.DrawRectangleRec(dialog_rect, rl.ColorAlpha(rl.BLACK, 0.9))
+            rl.DrawRectangleLinesEx(dialog_rect, 2, rl.ColorAlpha(rl.WHITE, 0.5))
+            
+            // Draw title
+            title := "Add New Location"
+            title_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(title), state.font_size * 1.2, 1)
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(title),
+                rl.Vector2{dialog_x + dialog_width/2 - title_size.x/2, dialog_y + 20},
+                state.font_size * 1.2,
+                1,
+            )
+            
+            // Draw input fields
+            input_x := dialog_x + 20
+            input_y := dialog_y + 60
+            input_width := dialog_width - 40
+            input_height := f32(30)
+            
+            // Name field
+            draw_outlined_text(state.font, "Name:", rl.Vector2{input_x, input_y}, state.font_size, 1)
+            name_box := rl.Rectangle{input_x, input_y + 25, input_width, input_height}
+            rl.DrawRectangleRec(name_box, rl.ColorAlpha(state.input.active_input == .LocationName ? rl.BLUE : rl.DARKGRAY, 0.5))
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(string(state.input.location_input.name[:])),
+                rl.Vector2{input_x + 5, input_y + 30},
+                state.font_size,
+                1,
+            )
+            
+            // World field
+            world_y := input_y + 70
+            draw_outlined_text(state.font, "World:", rl.Vector2{input_x, world_y}, state.font_size, 1)
+            world_box := rl.Rectangle{input_x, world_y + 25, input_width, input_height}
+            rl.DrawRectangleRec(world_box, rl.ColorAlpha(state.input.active_input == .LocationWorld ? rl.BLUE : rl.DARKGRAY, 0.5))
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(string(state.input.location_input.world[:])),
+                rl.Vector2{input_x + 5, world_y + 30},
+                state.font_size,
+                1,
+            )
+            
+            // Description field
+            desc_y := world_y + 70
+            draw_outlined_text(state.font, "Description:", rl.Vector2{input_x, desc_y}, state.font_size, 1)
+            desc_box := rl.Rectangle{input_x, desc_y + 25, input_width, input_height}
+            rl.DrawRectangleRec(desc_box, rl.ColorAlpha(state.input.active_input == .LocationDescription ? rl.BLUE : rl.DARKGRAY, 0.5))
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(string(state.input.location_input.description[:])),
+                rl.Vector2{input_x + 5, desc_y + 30},
+                state.font_size,
+                1,
+            )
+            
+            // Tags field
+            tags_y := desc_y + 70
+            draw_outlined_text(state.font, "Tags (comma-separated):", rl.Vector2{input_x, tags_y}, state.font_size, 1)
+            tags_box := rl.Rectangle{input_x, tags_y + 25, input_width, input_height}
+            rl.DrawRectangleRec(tags_box, rl.ColorAlpha(state.input.active_input == .LocationTags ? rl.BLUE : rl.DARKGRAY, 0.5))
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(string(state.input.location_input.tags[:])),
+                rl.Vector2{input_x + 5, tags_y + 30},
+                state.font_size,
+                1,
+            )
+            
+            // Instructions
+            instructions := "Press ENTER to continue, ESC to cancel, TAB to switch fields"
+            instr_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(instructions), state.font_size, 1)
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(instructions),
+                rl.Vector2{dialog_x + dialog_width/2 - instr_size.x/2, dialog_y + dialog_height - 40},
+                state.font_size,
+                1,
+            )
+
+            // Handle mouse clicks on input fields
+            if rl.IsMouseButtonPressed(.LEFT) {
+                mouse_pos := rl.GetMousePosition()
+                if rl.CheckCollisionPointRec(mouse_pos, name_box) {
+                    state.input.active_input = .LocationName
+                    state.input.should_clear = false
+                } else if rl.CheckCollisionPointRec(mouse_pos, world_box) {
+                    state.input.active_input = .LocationWorld
+                    state.input.should_clear = false
+                } else if rl.CheckCollisionPointRec(mouse_pos, desc_box) {
+                    state.input.active_input = .LocationDescription
+                    state.input.should_clear = false
+                } else if rl.CheckCollisionPointRec(mouse_pos, tags_box) {
+                    state.input.active_input = .LocationTags
+                    state.input.should_clear = false
+                }
+            }
+
+            // Handle ENTER key in popup
+            if rl.IsKeyPressed(.ENTER) {
+                #partial switch state.input.active_input {
+                    case .LocationName:
+                        state.input.active_input = .LocationWorld
+                    case .LocationWorld:
+                        state.input.active_input = .LocationDescription
+                    case .LocationDescription:
+                        state.input.active_input = .LocationTags
+                    case .LocationTags:
+                        // Create new location
+                        name := strings.clone(string(state.input.location_input.name[:]))
+                        world := strings.clone(string(state.input.location_input.world[:]))
+                        description := strings.clone(string(state.input.location_input.description[:]))
+                        tags_str := string(state.input.location_input.tags[:])
+                        
+                        // Split tags by comma
+                        tags := make([dynamic]string)
+                        if len(tags_str) > 0 {
+                            tag_parts := strings.split(tags_str, ",")
+                            for tag in tag_parts {
+                                if len(strings.trim_space(tag)) > 0 {
+                                    append(&tags, strings.clone(strings.trim_space(tag)))
+                                }
+                            }
+                        }
+                        
+                        // Create and append location
+                        location := Location{
+                            name = name,
+                            world = world,
+                            x = state.coordinates.source.x,
+                            z = state.coordinates.source.z,
+                            dimension = state.coordinates.source_dimension,
+                            description = description,
+                            tags = tags[:],
+                        }
+                        append(&state.locations.locations, location)
+                        
+                        // Reset input state
+                        state.input.active_input = .None
+                        state.state_tracking.has_unsaved_changes = true
+                }
+            }
+        }
     }
 
     // Cleanup and final save on exit

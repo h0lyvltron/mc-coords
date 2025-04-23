@@ -6,10 +6,15 @@ import "core:strconv"
 import rl "vendor:raylib"
 
 InputBox :: enum {
+    None,
     X,
     Z,
     Dimension,
-    None,
+    LocationSearch,
+    LocationName,
+    LocationWorld,
+    LocationDescription,
+    LocationTags,
 }
 
 InputAction :: enum {
@@ -50,12 +55,20 @@ KeyBinding :: struct {
 
 InputState :: struct {
     active_input: InputBox,
+    input_buffers: [3][32]u8,  // For X, Z coordinates
+    location_input: struct {    // New location input buffers
+        name: [64]u8,
+        world: [64]u8,
+        description: [256]u8,
+        tags: [128]u8,
+    },
+    key_states: map[rl.KeyboardKey]bool,
     should_clear: bool,
-    input_buffers: [2][32]u8,
-    key_states: map[rl.KeyboardKey]KeyState,
     mouse: rl.Vector2,
     key_bindings: [dynamic]KeyBinding,
     needs_dimension_toggle: bool,
+    last_backspace: f64,  // Time of last backspace for repeat handling
+    text_input_active: bool,  // Track if we're in text input mode
 }
 
 KeyConfig :: struct {
@@ -77,15 +90,22 @@ DEFAULT_KEY_CONFIG := KeyConfig{
 
 init_input_state :: proc(state: ^InputState) {
     state.key_bindings = make([dynamic]KeyBinding)
-    state.key_states = make(map[rl.KeyboardKey]KeyState)
+    state.key_states = make(map[rl.KeyboardKey]bool)
     state.active_input = .None
     state.should_clear = false
     state.needs_dimension_toggle = false
+    state.text_input_active = false
     
-    state.key_states[.BACKSPACE] = KeyState{config = DEFAULT_KEY_CONFIG}
-    state.key_states[.LEFT] = KeyState{config = DEFAULT_KEY_CONFIG}
-    state.key_states[.RIGHT] = KeyState{config = DEFAULT_KEY_CONFIG}
-    state.key_states[.TAB] = KeyState{config = KeyConfig{initial_delay = 0.5, repeat_rate = 0.2}}
+    // Initialize location input buffers
+    for i in 0..<len(state.location_input.name) do state.location_input.name[i] = 0
+    for i in 0..<len(state.location_input.world) do state.location_input.world[i] = 0
+    for i in 0..<len(state.location_input.description) do state.location_input.description[i] = 0
+    for i in 0..<len(state.location_input.tags) do state.location_input.tags[i] = 0
+    
+    state.key_states[.BACKSPACE] = true
+    state.key_states[.LEFT] = true
+    state.key_states[.RIGHT] = true
+    state.key_states[.TAB] = true
     
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.W, .Move_Up})
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.S, .Move_Down})
@@ -173,13 +193,87 @@ handle_numeric_input :: proc(state: ^InputState, key: rune) -> bool {
     return false
 }
 
+handle_text_input :: proc(state: ^InputState) -> bool {
+    if !state.text_input_active {
+        return false
+    }
+
+    current_buffer: []u8
+    max_len: int
+
+    #partial switch state.active_input {
+        case .LocationName:
+            current_buffer = state.location_input.name[:]
+            max_len = len(state.location_input.name) - 1
+        case .LocationWorld:
+            current_buffer = state.location_input.world[:]
+            max_len = len(state.location_input.world) - 1
+        case .LocationDescription:
+            current_buffer = state.location_input.description[:]
+            max_len = len(state.location_input.description) - 1
+        case .LocationTags:
+            current_buffer = state.location_input.tags[:]
+            max_len = len(state.location_input.tags) - 1
+        case:
+            return false
+    }
+
+    if state.should_clear {
+        for i := 0; i < len(current_buffer); i += 1 {
+            current_buffer[i] = 0
+        }
+        state.should_clear = false
+    }
+
+    // Find current length by looking for first null character or end of buffer
+    text_len := 0
+    for text_len < len(current_buffer) {
+        if current_buffer[text_len] == 0 {
+            break
+        }
+        text_len += 1
+    }
+
+    // Handle character input
+    char := rl.GetCharPressed()
+    for char != 0 {
+        if text_len < max_len && char >= 32 && char <= 126 {
+            current_buffer[text_len] = u8(char)
+            current_buffer[text_len + 1] = 0  // Ensure null termination
+            text_len += 1
+        }
+        char = rl.GetCharPressed()
+    }
+
+    // Handle backspace
+    if rl.IsKeyPressed(.BACKSPACE) || (rl.IsKeyDown(.BACKSPACE) && rl.GetTime() - state.last_backspace > 0.12) {
+        if text_len > 0 {
+            text_len -= 1  // Move back one character
+            current_buffer[text_len] = 0  // Set current character to null
+            state.last_backspace = rl.GetTime()
+        }
+    }
+
+    return true
+}
+
 update_input_state :: proc(state: ^InputState) -> bool {
     current_time := f32(rl.GetTime())
     
     state.mouse = rl.GetMousePosition()
     
+    // Update text input active state
+    state.text_input_active = state.active_input == .LocationName || 
+                            state.active_input == .LocationWorld || 
+                            state.active_input == .LocationDescription || 
+                            state.active_input == .LocationTags
+
+    if state.text_input_active {
+        handle_text_input(state)
+    }
+
     for key, &key_state in &state.key_states {
-        if update_key_state(&key_state, rl.IsKeyDown(key), current_time) {
+        if update_key_state(&KeyState{is_held = key_state, config = DEFAULT_KEY_CONFIG}, rl.IsKeyDown(key), current_time) {
             action := get_action_for_key(state, key)
             #partial switch action {
             case .Backspace:
@@ -198,26 +292,26 @@ update_input_state :: proc(state: ^InputState) -> bool {
                 }
             case .FocusNext:
                 if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
-                    switch state.active_input {
-                    case .X:
-                        state.active_input = .Dimension
-                    case .Z:
-                        state.active_input = .X
-                    case .Dimension:
-                        state.active_input = .Z
-                    case .None:
-                        state.active_input = .Dimension
+                    #partial switch state.active_input {
+                        case .X:
+                            state.active_input = .Dimension
+                        case .Z:
+                            state.active_input = .X
+                        case .Dimension:
+                            state.active_input = .Z
+                        case .None:
+                            state.active_input = .Dimension
                     }
                 } else {
-                    switch state.active_input {
-                    case .X:
-                        state.active_input = .Z
-                    case .Z:
-                        state.active_input = .Dimension
-                    case .Dimension:
-                        state.active_input = .X
-                    case .None:
-                        state.active_input = .X
+                    #partial switch state.active_input {
+                        case .X:
+                            state.active_input = .Z
+                        case .Z:
+                            state.active_input = .Dimension
+                        case .Dimension:
+                            state.active_input = .X
+                        case .None:
+                            state.active_input = .X
                     }
                 }
                 state.should_clear = state.active_input == .X || state.active_input == .Z

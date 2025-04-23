@@ -6,6 +6,7 @@ import rl "vendor:raylib"
 
 Location :: struct {
     name: string,
+    world: string,
     x: int,
     z: int,
     dimension: Dimension,
@@ -34,6 +35,7 @@ init_location_manager :: proc() -> LocationManager {
 add_location :: proc(manager: ^LocationManager, name: string, x: int, z: int, dimension: Dimension) {
     location := Location {
         name = strings.clone(name),
+        world = strings.clone(""),
         x = x,
         z = z,
         dimension = dimension,
@@ -44,6 +46,7 @@ add_location :: proc(manager: ^LocationManager, name: string, x: int, z: int, di
 delete_location :: proc(manager: ^LocationManager, index: int) {
     if index >= 0 && index < len(manager.locations) {
         delete(manager.locations[index].name)
+        delete(manager.locations[index].world)
         unordered_remove(&manager.locations, index)
         if manager.selected_index >= len(manager.locations) {
             manager.selected_index = len(manager.locations) - 1
@@ -54,6 +57,7 @@ delete_location :: proc(manager: ^LocationManager, index: int) {
 destroy_location_manager :: proc(manager: ^LocationManager) {
     for location in manager.locations {
         delete(location.name)
+        delete(location.world)
     }
     delete(manager.locations)
 }
