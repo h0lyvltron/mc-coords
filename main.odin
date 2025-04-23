@@ -25,7 +25,7 @@ AppState :: struct {
     // Future enhancements
     locations: LocationDatabase,
     settings: Settings,
-    ui_state: UIState,
+    layout: Layout,
     debug_view: bool,  // Toggle for debug visualizations
     state_tracking: struct {
         has_unsaved_changes: bool,
@@ -34,27 +34,236 @@ AppState :: struct {
     },
 }
 
+Modal_State :: enum {
+    None,
+    ConvertCoordinates,
+    SaveLocation,
+    LoadLocation,
+    Settings,
+    Help,
+}
+
+Settings :: struct {
+    theme: string,
+    font_size: f32,
+    auto_save: bool,
+    default_dimension: Dimension,
+}
+
+WindowDefaultFlags :: struct {
+    title: string,
+    width: i32,
+    height: i32,
+    pos_x: i32,
+    pos_y: i32,
+}
+
+WINDOW_DEFAULT_FLAGS := WindowDefaultFlags {
+    title = "Minecraft Location Manager",
+    width = 480,
+    height = 640,
+    pos_x = 100,
+    pos_y = 100,
+}
+
+BackgroundImage :: struct {
+    texture: rl.Texture2D,
+    source_rect: rl.Rectangle,
+    dest_rect: rl.Rectangle,
+    shader: rl.Shader,
+    time_loc: i32,        // Uniform location for time
+    resolution_loc: i32,  // Uniform location for resolution
+}
+
+WindowState :: struct {
+    width: i32,
+    height: i32,
+    min_width: i32,
+    min_height: i32,
+    is_resizing: bool,
+    last_width: i32,
+    last_height: i32,
+    position: struct {
+        x: i32,
+        y: i32,
+    },
+}
+
+init_window_state :: proc() -> WindowState {
+    return WindowState {
+        width = WINDOW_DEFAULT_FLAGS.width,
+        height = WINDOW_DEFAULT_FLAGS.height,
+        min_width = 400,  // Minimum window width
+        min_height = 300, // Minimum window height
+        is_resizing = false,
+        last_width = WINDOW_DEFAULT_FLAGS.width,
+        last_height = WINDOW_DEFAULT_FLAGS.height,
+        position = {
+            x = WINDOW_DEFAULT_FLAGS.pos_x,
+            y = WINDOW_DEFAULT_FLAGS.pos_y,
+        },
+    }
+}
+
+handle_window_resize :: proc(window: ^WindowState) {
+    current_width := rl.GetScreenWidth()
+    current_height := rl.GetScreenHeight()
+    
+    // Check if window is being resized
+    if current_width != window.width || current_height != window.height {
+        window.is_resizing = true
+        
+        // Enforce minimum size
+        if current_width < window.min_width {
+            rl.SetWindowSize(window.min_width, current_height)
+            current_width = window.min_width
+        }
+        if current_height < window.min_height {
+            rl.SetWindowSize(current_width, window.min_height)
+            current_height = window.min_height
+        }
+        
+        // Update window state
+        window.width = current_width
+        window.height = current_height
+        
+        // Store last valid size
+        window.last_width = current_width
+        window.last_height = current_height
+    } else {
+        window.is_resizing = false
+    }
+    
+    // Update window position
+    pos := rl.GetWindowPosition()
+    window.position.x = i32(pos.x)
+    window.position.y = i32(pos.y)
+}
+
+update_window_state :: proc(window: ^WindowState, state: ^AppState) {
+    handle_window_resize(window)
+    
+    // Update app state with new dimensions
+    state.window_width = window.width
+    state.window_height = window.height
+    
+    // Update layout
+    update_layout(&state.layout, window.width, window.height)
+    
+    // Update background image
+    if window.is_resizing {
+        // Calculate aspect ratio preserving dimensions
+        bg_width := f32(state.background.texture.width)
+        bg_height := f32(state.background.texture.height)
+        window_aspect := f32(window.width) / f32(window.height)
+        bg_aspect := bg_width / bg_height
+        
+        dest_width: f32
+        dest_height: f32
+        
+        if window_aspect > bg_aspect {
+            // Window is wider than background
+            dest_height = f32(window.height)
+            dest_width = dest_height * bg_aspect
+        } else {
+            // Window is taller than background
+            dest_width = f32(window.width)
+            dest_height = dest_width / bg_aspect
+        }
+        
+        // Center the background
+        x_offset := (f32(window.width) - dest_width) / 2
+        y_offset := (f32(window.height) - dest_height) / 2
+        
+        // Update background destination rectangle
+        state.background.dest_rect = rl.Rectangle{
+            x = x_offset,
+            y = y_offset,
+            width = dest_width,
+            height = dest_height,
+        }
+        
+        // Update shader resolution
+        resolution := [2]f32{f32(window.width), f32(window.height)}
+        rl.SetShaderValue(state.background.shader, state.background.resolution_loc, &resolution, .VEC2)
+        
+        // Update title shader resolutions
+        for i in 0..<len(state.title.shaders) {
+            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].resolution_loc, &resolution, .VEC2)
+        }
+    }
+}
+
+calculate_image_crop :: proc(image_width, image_height, target_width, target_height: i32) -> rl.Rectangle {
+    source_aspect := f32(image_width) / f32(image_height)
+    target_aspect := f32(target_width) / f32(target_height)
+    crop := rl.Rectangle{}
+    
+    if source_aspect > target_aspect {
+        crop.height = f32(image_height)
+        crop.width = crop.height * target_aspect
+        crop.x = f32(image_width - i32(crop.width)) / 2
+        crop.y = 0
+    } else {
+        crop.width = f32(image_width)
+        crop.height = crop.width / target_aspect
+        crop.x = 0
+        crop.y = f32(image_height - i32(crop.height)) / 2
+    }
+    
+    return crop
+}
+
+load_background_image :: proc(path: string, window_width, window_height: i32) -> (BackgroundImage, bool) {
+    image := rl.LoadImage(strings.clone_to_cstring(path))
+    if image.data == nil {
+        fmt.eprintln("Failed to load image:", path)
+        return BackgroundImage{}, false
+    }
+    defer rl.UnloadImage(image)
+    
+    crop := calculate_image_crop(image.width, image.height, window_width, window_height)
+    
+    texture := rl.LoadTextureFromImage(image)
+    if texture.id == 0 {
+        fmt.eprintln("Failed to create texture from image:", path)
+        return BackgroundImage{}, false
+    }
+    
+    shader := rl.LoadShaderFromMemory(BACKGROUND_VERTEX_SHADER, BACKGROUND_FRAGMENT_SHADER)
+    if shader.id == 0 {
+        fmt.eprintln("Failed to load background shader")
+        rl.UnloadTexture(texture)
+        return BackgroundImage{}, false
+    }
+    
+    time_loc := rl.GetShaderLocation(shader, "time")
+    resolution_loc := rl.GetShaderLocation(shader, "resolution")
+    
+    resolution := [2]f32{f32(window_width), f32(window_height)}
+    rl.SetShaderValue(shader, resolution_loc, &resolution, .VEC2)
+    
+    return BackgroundImage{
+        texture = texture,
+        source_rect = crop,
+        dest_rect = rl.Rectangle{0, 0, f32(window_width), f32(window_height)},
+        shader = shader,
+        time_loc = time_loc,
+        resolution_loc = resolution_loc,
+    }, true
+}
+
 TitleImage :: struct {
     texture: rl.Texture2D,
     char_width: i32,
     char_height: i32,
     chars: [10]rl.Rectangle, // 9 letters + 1 empty
     padding: f32,
-    shaders: [5]struct {
+    shaders: [3]struct { 
         shader: rl.Shader,
         time_loc: i32,
         resolution_loc: i32,
         blend_factor: f32,  // How much this shader contributes to the final result
-        // Wave shader parameters (only used by sine wave shader)
-        wave_speed_loc: i32,
-        wave_amplitude_loc: i32,
-        wave_frequency_loc: i32,
-        wave_smoothness_loc: i32,
-        // Color parameters
-        color_speed_loc: i32,
-        color_phase_loc: i32,
-        color_spread_loc: i32,
-        color_intensity_loc: i32,
         // Digital noise parameters
         noise_scale_loc: i32,
         glitch_intensity_loc: i32,
@@ -71,19 +280,7 @@ TitleImage :: struct {
         time: f32,
         rotation: [9]f32,
         scale: [9]f32,
-        tint_color: [9]rl.Color,  // Individual tint colors for each letter
-    },
-    // Current wave parameters
-    wave_params: struct {
-        speed: f32,
-        amplitude: f32,
-        frequency: f32,
-        smoothness: f32,
-        // Color parameters
-        color_speed: f32,
-        color_phase: f32,
-        color_spread: f32,
-        color_intensity: f32,
+        tint_color: [9]rl.Color,
     },
     // Digital noise parameters
     digital_noise_params: struct {
@@ -107,11 +304,11 @@ init_app :: proc() -> AppState {
         font_size = DEFAULT_FONT_SETTINGS.size,
         coordinates = init_coordinate_state(),
         help_visible = false,
-        debug_view = false,  // Debug visualization off by default
+        debug_view = false,
         state_tracking = {
             has_unsaved_changes = false,
             last_auto_save = 0,
-            auto_save_interval = 5.0,  // Auto-save every 5 seconds when changes exist
+            auto_save_interval = 5.0,
         },
     }
     
@@ -147,7 +344,7 @@ init_app :: proc() -> AppState {
     state.title.char_height = 32
     state.title.padding = 0
     
-    // Initialize character rectangles - each sprite is 32x32
+    // Initialize title character rectangles - each sprite is 32x32
     for i in 0..<10 {
         state.title.chars[i] = rl.Rectangle{
             x = f32(i32(i) * state.title.char_width),
@@ -172,12 +369,10 @@ init_app :: proc() -> AppState {
     // Initialize shaders
     state.title.shaders[0].shader = rl.LoadShaderFromMemory(DIGITAL_NOISE_VERTEX_SHADER, DIGITAL_NOISE_FRAGMENT_SHADER)  // Digital noise shader
     state.title.shaders[1].shader = rl.LoadShaderFromMemory(HEX_TRUCHET_VERTEX_SHADER, HEX_TRUCHET_FRAGMENT_SHADER)
-    state.title.shaders[2].shader = rl.LoadShaderFromMemory(HEX_TRUCHET_VERTEX_SHADER, RAYMARCH_FRAGMENT_SHADER)
-    state.title.shaders[3].shader = rl.LoadShaderFromMemory(RAYMARCH_VERTEX_SHADER, RAYMARCH_FRAGMENT_SHADER)
-    state.title.shaders[4].shader = rl.LoadShaderFromMemory(SINE_WAVE_VERTEX_SHADER, SINE_WAVE_FRAGMENT_SHADER)
+    state.title.shaders[2].shader = rl.LoadShaderFromMemory(RAYMARCH_VERTEX_SHADER, RAYMARCH_FRAGMENT_SHADER)
 
     // Check if shaders loaded successfully
-    for i in 0..<4 {
+    for i in 0..<3 {
         if state.title.shaders[i].shader.id == 0 {
             fmt.eprintln("! Failed to load shader", i)
             return state
@@ -185,7 +380,7 @@ init_app :: proc() -> AppState {
     }
 
     // Get shader locations
-    for i in 0..<5 {
+    for i in 0..<3 {
         state.title.shaders[i].time_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "time")
         state.title.shaders[i].resolution_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "resolution")
         
@@ -201,17 +396,17 @@ init_app :: proc() -> AppState {
             state.title.shaders[i].pulse_intensity_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "pulse_intensity")
             state.title.shaders[i].glitch_color_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "glitch_color")
             
-            // Set default values
+            // Set default values from state.json
             state.title.digital_noise_params = {
-                noise_scale = 32.0,
-                glitch_intensity = 0.5,
-                scan_line_density = 2.0,
-                tear_frequency = 0.02,
-                rgb_split_amount = 0.002,
-                static_amount = 0.1,
-                pulse_speed = 3.0,
-                pulse_intensity = 0.1,
-                glitch_color = {1.1, 1.0, 1.2},  // Slight purple tint
+                noise_scale = 0.1,
+                glitch_intensity = 0.95,
+                scan_line_density = 10.0,
+                tear_frequency = 0.2,
+                rgb_split_amount = 0.011,
+                static_amount = 0.5,
+                pulse_speed = 5.0,
+                pulse_intensity = 1.0,
+                glitch_color = {1.1, 1.0, 1.2},
             }
             
             // Apply parameters
@@ -225,53 +420,28 @@ init_app :: proc() -> AppState {
             rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].pulse_intensity_loc, &state.title.digital_noise_params.pulse_intensity, .FLOAT)
             rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].glitch_color_loc, &state.title.digital_noise_params.glitch_color[0], .VEC3)
         }
-        
-        // Get wave shader locations only for the sine wave shader (index 4)
-        if i == 4 {
-            state.title.shaders[i].wave_speed_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_speed")
-            state.title.shaders[i].wave_amplitude_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_amplitude")
-            state.title.shaders[i].wave_frequency_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_frequency")
-            state.title.shaders[i].wave_smoothness_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "wave_smoothness")
-            state.title.shaders[i].color_speed_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_speed")
-            state.title.shaders[i].color_phase_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_phase")
-            state.title.shaders[i].color_spread_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_spread")
-            state.title.shaders[i].color_intensity_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "color_intensity")
-        }
     }
 
     // Set blend factors
     state.title.shaders[0].blend_factor = 1.0  // Digital noise shader - reduced for subtle glitch effect
-    state.title.shaders[1].blend_factor = 0.5  // Hex Truchet shader - medium contribution
+    state.title.shaders[1].blend_factor = 0.4  // Hex Truchet shader - medium contribution
     state.title.shaders[2].blend_factor = 0.3  // Raymarch shader - reduced for subtle depth
-    state.title.shaders[3].blend_factor = 0.3  // Additional raymarch shader - medium contribution
-    state.title.shaders[4].blend_factor = 0.2  // Sine wave shader - reduced for subtle movement
 
     // Set initial shader values
     resolution := [2]f32{f32(state.window_width), f32(state.window_height)}
-    for i in 0..<4 {
+    for i in 0..<3 {
         rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].resolution_loc, &resolution, .VEC2)
     }
 
-    // Apply shader parameters from loaded state
-    shader := &state.title.shaders[4]  // Sine wave shader
-    rl.SetShaderValue(shader.shader, shader.wave_speed_loc, &state.title.wave_params.speed, .FLOAT)
-    rl.SetShaderValue(shader.shader, shader.wave_amplitude_loc, &state.title.wave_params.amplitude, .FLOAT)
-    rl.SetShaderValue(shader.shader, shader.wave_frequency_loc, &state.title.wave_params.frequency, .FLOAT)
-    rl.SetShaderValue(shader.shader, shader.wave_smoothness_loc, &state.title.wave_params.smoothness, .FLOAT)
-    rl.SetShaderValue(shader.shader, shader.color_speed_loc, &state.title.wave_params.color_speed, .FLOAT)
-    rl.SetShaderValue(shader.shader, shader.color_phase_loc, &state.title.wave_params.color_phase, .FLOAT)
-    rl.SetShaderValue(shader.shader, shader.color_spread_loc, &state.title.wave_params.color_spread, .FLOAT)
-    rl.SetShaderValue(shader.shader, shader.color_intensity_loc, &state.title.wave_params.color_intensity, .FLOAT)
-
     fmt.println("* Shader parameters applied from loaded state:")
-    fmt.println("  Wave: Speed=", state.title.wave_params.speed, 
-                " Amp=", state.title.wave_params.amplitude,
-                " Freq=", state.title.wave_params.frequency,
-                " Smooth=", state.title.wave_params.smoothness)
-    fmt.println("  Color: Speed=", state.title.wave_params.color_speed,
-                " Phase=", state.title.wave_params.color_phase,
-                " Spread=", state.title.wave_params.color_spread,
-                " Int=", state.title.wave_params.color_intensity)
+    fmt.println("  Digital Noise: Scale=", state.title.digital_noise_params.noise_scale,
+                " Intensity=", state.title.digital_noise_params.glitch_intensity,
+                " Scan Line Density=", state.title.digital_noise_params.scan_line_density,
+                " Tear Frequency=", state.title.digital_noise_params.tear_frequency,
+                " RGB Split Amount=", state.title.digital_noise_params.rgb_split_amount,
+                " Static Amount=", state.title.digital_noise_params.static_amount,
+                " Pulse Speed=", state.title.digital_noise_params.pulse_speed,
+                " Pulse Intensity=", state.title.digital_noise_params.pulse_intensity)
     
     state.locations = LocationDatabase {
         locations = make([dynamic]Location),
@@ -286,23 +456,21 @@ init_app :: proc() -> AppState {
         default_dimension = .Overworld,
     }
     
-    state.ui_state = UIState {
-        elements = make(map[UIElement_ID]UIElementState),
-        active_element = -1,
-        previous_element = -1,
-        modal_state = .None,
-    }
+    state.layout = DEFAULT_LAYOUT
     
     return state
 }
 
 main :: proc() {
+    // Enable window resizing and other window flags
+    rl.SetConfigFlags({.WINDOW_RESIZABLE, .WINDOW_HIGHDPI})
     rl.InitWindow(WINDOW_DEFAULT_FLAGS.width, WINDOW_DEFAULT_FLAGS.height, strings.clone_to_cstring(WINDOW_DEFAULT_FLAGS.title))
     defer rl.CloseWindow()
 
     rl.SetTargetFPS(60)
 
     state := init_app()
+    window := init_window_state()
     defer {
         rl.UnloadFont(state.font)
         rl.UnloadTexture(state.title.texture)
@@ -327,46 +495,116 @@ main :: proc() {
         delete(state.locations.locations)
     }
     
-    layout := DEFAULT_LAYOUT
+    // Initialize layout sections
+    converter_section := add_section(&state.layout, "converter", 300)
+    locations_section := add_section(&state.layout, "locations", 400)
     
-    x_input := make_input_box(layout, Position{20, 140}, "X:", state.font, state.font_size, 1)
-    z_input := make_input_box(layout, Position{20, 140 + layout.section_spacing}, "Z:", state.font, state.font_size, 1)
-    overworld_button, nether_button := make_dimension_buttons(layout, Position{20, 140 + 2*layout.section_spacing + layout.spacing})
+    // Create UI elements in the converter section
+    x_input := make_input_box(&state.layout, converter_section, Position{20, 140}, "X:", state.font, state.font_size, 1)
+    z_input := make_input_box(&state.layout, converter_section, Position{20, 140 + state.layout.section_spacing}, "Z:", state.font, state.font_size, 1)
+    overworld_button, nether_button := make_dimension_buttons(&state.layout, converter_section, Position{20, 140 + 2*state.layout.section_spacing + state.layout.spacing})
+    
+    // Create converted coordinates display
+    converted_coords := UIElement{
+        rect = rl.Rectangle{
+            x = state.layout.margin,
+            y = 140 + 3*state.layout.section_spacing + state.layout.spacing,
+            width = 200,
+            height = state.font_size * 2,
+        },
+        text_pos = Position{
+            x = state.layout.margin + 10,
+            y = 140 + 3*state.layout.section_spacing + state.layout.spacing + state.font_size/2,
+        },
+    }
+    
+    // Add UI elements to section's element map
+    converter_section.elements[UIElement_ID(0)] = UIElementState{
+        bounds = x_input.rect,
+        is_active = false,
+        is_visible = true,
+        is_hovered = false,
+    }
+    converter_section.elements[UIElement_ID(1)] = UIElementState{
+        bounds = z_input.rect,
+        is_active = false,
+        is_visible = true,
+        is_hovered = false,
+    }
+    converter_section.elements[UIElement_ID(2)] = UIElementState{
+        bounds = overworld_button.rect,
+        is_active = false,
+        is_visible = true,
+        is_hovered = false,
+    }
+    converter_section.elements[UIElement_ID(3)] = UIElementState{
+        bounds = nether_button.rect,
+        is_active = false,
+        is_visible = true,
+        is_hovered = false,
+    }
+    converter_section.elements[UIElement_ID(4)] = UIElementState{
+        bounds = converted_coords.rect,
+        is_active = false,
+        is_visible = true,
+        is_hovered = false,
+    }
 
     for !rl.WindowShouldClose() {
-        if rl.IsMouseButtonPressed(.LEFT) {
+        // Update window state and handle resizing
+        update_window_state(&window, &state)
+        
+        // Handle scrolling
+        handle_scroll(&state.layout, rl.GetMousePosition())
+        
+        // Get current mouse position
         mouse_pos := rl.GetMousePosition()
+        
+        // Update UI element positions based on section scroll
+        for i in 0..<5 {
+            element := &converter_section.elements[UIElement_ID(i)]
+            if element.is_visible {
+                element.bounds.y -= converter_section.scroll_offset
+            }
+        }
+        
+        if rl.IsMouseButtonPressed(.LEFT) {
             handled_click := false
             
-            if rl.CheckCollisionPointRec(mouse_pos, overworld_button.rect) {
-                if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Overworld {
-                    fmt.println("State change: Clicked Overworld button")
-                    handle_dimension_click(&state, .Overworld)
+            // Check clicks against section elements
+            for i in 0..<5 {
+                element := &converter_section.elements[UIElement_ID(i)]
+                if element.is_visible && rl.CheckCollisionPointRec(mouse_pos, element.bounds) {
+                    switch i {
+                    case 0: // X input
+                        if state.input.active_input != .X {
+                            fmt.println("State change: Clicked X input")
+                            state.input.active_input = .X
+                            state.input.should_clear = true
+                        }
+                    case 1: // Z input
+                        if state.input.active_input != .Z {
+                            fmt.println("State change: Clicked Z input")
+                            state.input.active_input = .Z
+                            state.input.should_clear = true
+                        }
+                    case 2: // Overworld button
+                        if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Overworld {
+                            fmt.println("State change: Clicked Overworld button")
+                            handle_dimension_click(&state, .Overworld)
+                        }
+                    case 3: // Nether button
+                        if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Nether {
+                            fmt.println("State change: Clicked Nether button")
+                            handle_dimension_click(&state, .Nether)
+                        }
+                    }
+                    handled_click = true
+                    break
                 }
-                handled_click = true
-            } else if rl.CheckCollisionPointRec(mouse_pos, nether_button.rect) {
-                if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Nether {
-                    fmt.println("State change: Clicked Nether button")
-                    handle_dimension_click(&state, .Nether)
-                }
-                handled_click = true
             }
             
-            if !handled_click && rl.CheckCollisionPointRec(mouse_pos, x_input.rect) {
-                if state.input.active_input != .X {
-                    fmt.println("State change: Clicked X input")
-                    state.input.active_input = .X
-                    state.input.should_clear = true
-                }
-                handled_click = true
-            } else if !handled_click && rl.CheckCollisionPointRec(mouse_pos, z_input.rect) {
-                if state.input.active_input != .Z {
-                    fmt.println("State change: Clicked Z input")
-                    state.input.active_input = .Z
-                    state.input.should_clear = true
-                }
-                handled_click = true
-            } else if !handled_click && state.clipboard.hovered {
+            if !handled_click && state.clipboard.hovered {
                 coord_str := fmt.tprintf("%d, %d", state.coordinates.converted.x, state.coordinates.converted.z)
                 rl.SetClipboardText(strings.clone_to_cstring(coord_str))
                 state.clipboard.last_copied = 0.5 // Start feedback animation
@@ -403,11 +641,14 @@ main :: proc() {
             state.input.needs_dimension_toggle = false
         }
 
-        converted_pos := rl.Vector2{DEFAULT_LAYOUT.margin, f32(state.window_height/2) + 50}
-        converted_rect := rl.Rectangle{converted_pos.x, converted_pos.y, 200, state.font_size * 2}
-
-        mouse_pos := rl.GetMousePosition()
-        state.clipboard.hovered = rl.CheckCollisionPointRec(mouse_pos, converted_rect)
+        // Update converted coordinates position based on section scroll
+        converted_coords.rect.y = 140 + 3*state.layout.section_spacing + state.layout.spacing - converter_section.scroll_offset
+        converted_coords.text_pos.y = 140 + 3*state.layout.section_spacing + state.layout.spacing + state.font_size/2 - converter_section.scroll_offset
+        
+        // Update element bounds for click detection
+        element := converter_section.elements[UIElement_ID(4)]
+        element.bounds = converted_coords.rect
+        converter_section.elements[UIElement_ID(4)] = element
 
         if state.clipboard.last_copied > 0 {
             state.clipboard.last_copied -= rl.GetFrameTime()
@@ -506,107 +747,117 @@ main :: proc() {
         rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].time_loc, &title_time, .FLOAT)
         rl.SetShaderValue(state.title.shaders[1].shader, state.title.shaders[1].time_loc, &title_time, .FLOAT)
         rl.SetShaderValue(state.title.shaders[2].shader, state.title.shaders[2].time_loc, &title_time, .FLOAT)
-        rl.SetShaderValue(state.title.shaders[3].shader, state.title.shaders[3].time_loc, &title_time, .FLOAT)
-        rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].time_loc, &title_time, .FLOAT)  // Add time update for sine wave shader
         
-        // Update wave parameters based on keyboard input
+        shader := &state.title.shaders[0]  // Digital noise shader
+        rl.SetShaderValue(shader.shader, shader.noise_scale_loc, &state.title.digital_noise_params.noise_scale, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.glitch_intensity_loc, &state.title.digital_noise_params.glitch_intensity, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.scan_line_density_loc, &state.title.digital_noise_params.scan_line_density, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.tear_frequency_loc, &state.title.digital_noise_params.tear_frequency, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.rgb_split_amount_loc, &state.title.digital_noise_params.rgb_split_amount, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.static_amount_loc, &state.title.digital_noise_params.static_amount, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.pulse_speed_loc, &state.title.digital_noise_params.pulse_speed, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.pulse_intensity_loc, &state.title.digital_noise_params.pulse_intensity, .FLOAT)
+        rl.SetShaderValue(shader.shader, shader.glitch_color_loc, &state.title.digital_noise_params.glitch_color[0], .VEC3)
+        
+        // Update parameters on keyboard input
         if rl.IsKeyDown(.LEFT_CONTROL) && !rl.IsKeyDown(.LEFT_SHIFT) {
             if rl.IsKeyDown(.Q) {
-                state.title.wave_params.speed = max(0.1, state.title.wave_params.speed - 0.1)
-                handle_shader_param_update(&state, .Speed, state.title.wave_params.speed)
+                state.title.digital_noise_params.noise_scale = max(0.1, state.title.digital_noise_params.noise_scale - 0.5)
+                handle_shader_param_update(&state, .NoiseScale, state.title.digital_noise_params.noise_scale)
             }
             if rl.IsKeyDown(.A) {
-                state.title.wave_params.speed = min(2.0, state.title.wave_params.speed + 0.1)
-                handle_shader_param_update(&state, .Speed, state.title.wave_params.speed)
+                state.title.digital_noise_params.noise_scale = min(50.0, state.title.digital_noise_params.noise_scale + 0.5)
+                handle_shader_param_update(&state, .NoiseScale, state.title.digital_noise_params.noise_scale)
             }
             if rl.IsKeyDown(.W) {
-                state.title.wave_params.amplitude = clamp(state.title.wave_params.amplitude + 0.01, 0.01, 0.5)
-                handle_shader_param_update(&state, .Amplitude, state.title.wave_params.amplitude)
+                state.title.digital_noise_params.glitch_intensity = clamp(state.title.digital_noise_params.glitch_intensity + 0.05, 0.0, 1.0)
+                handle_shader_param_update(&state, .GlitchIntensity, state.title.digital_noise_params.glitch_intensity)
             }
             if rl.IsKeyDown(.S) {
-                state.title.wave_params.amplitude = clamp(state.title.wave_params.amplitude - 0.01, 0.01, 0.5)
-                handle_shader_param_update(&state, .Amplitude, state.title.wave_params.amplitude)
+                state.title.digital_noise_params.glitch_intensity = clamp(state.title.digital_noise_params.glitch_intensity - 0.05, 0.0, 1.0)
+                handle_shader_param_update(&state, .GlitchIntensity, state.title.digital_noise_params.glitch_intensity)
             }
             if rl.IsKeyDown(.E) {
-                state.title.wave_params.frequency = clamp(state.title.wave_params.frequency + 0.1, 0.1, 20.0)
-                handle_shader_param_update(&state, .Frequency, state.title.wave_params.frequency)
+                state.title.digital_noise_params.scan_line_density = clamp(state.title.digital_noise_params.scan_line_density + 0.1, 0.1, 10.0)
+                handle_shader_param_update(&state, .ScanLineDensity, state.title.digital_noise_params.scan_line_density)
             }
             if rl.IsKeyDown(.D) {
-                state.title.wave_params.frequency = clamp(state.title.wave_params.frequency - 0.1, 0.1, 20.0)
-                handle_shader_param_update(&state, .Frequency, state.title.wave_params.frequency)
+                state.title.digital_noise_params.scan_line_density = clamp(state.title.digital_noise_params.scan_line_density - 0.1, 0.1, 10.0)
+                handle_shader_param_update(&state, .ScanLineDensity, state.title.digital_noise_params.scan_line_density)
             }
             if rl.IsKeyDown(.R) {
-                state.title.wave_params.smoothness = clamp(state.title.wave_params.smoothness + 0.01, 0.01, 1.0)
-                handle_shader_param_update(&state, .Smoothness, state.title.wave_params.smoothness)
+                state.title.digital_noise_params.tear_frequency = clamp(state.title.digital_noise_params.tear_frequency + 0.01, 0.0, 0.2)
+                handle_shader_param_update(&state, .TearFrequency, state.title.digital_noise_params.tear_frequency)
             }
             if rl.IsKeyDown(.F) {
-                state.title.wave_params.smoothness = clamp(state.title.wave_params.smoothness - 0.01, 0.01, 1.0)
-                handle_shader_param_update(&state, .Smoothness, state.title.wave_params.smoothness)
+                state.title.digital_noise_params.tear_frequency = clamp(state.title.digital_noise_params.tear_frequency - 0.01, 0.0, 0.2)
+                handle_shader_param_update(&state, .TearFrequency, state.title.digital_noise_params.tear_frequency)
             }
             if rl.IsKeyDown(.T) {
-                state.title.wave_params.color_speed = clamp(state.title.wave_params.color_speed + 0.01, 0.01, 2.0)
-                handle_shader_param_update(&state, .ColorSpeed, state.title.wave_params.color_speed)
+                state.title.digital_noise_params.rgb_split_amount = clamp(state.title.digital_noise_params.rgb_split_amount + 0.001, 0.0, 0.02)
+                handle_shader_param_update(&state, .RGBSplitAmount, state.title.digital_noise_params.rgb_split_amount)
             }
             if rl.IsKeyDown(.G) {
-                state.title.wave_params.color_speed = clamp(state.title.wave_params.color_speed - 0.01, 0.01, 2.0)
-                handle_shader_param_update(&state, .ColorSpeed, state.title.wave_params.color_speed)
+                state.title.digital_noise_params.rgb_split_amount = clamp(state.title.digital_noise_params.rgb_split_amount - 0.001, 0.0, 0.02)
+                handle_shader_param_update(&state, .RGBSplitAmount, state.title.digital_noise_params.rgb_split_amount)
             }
             if rl.IsKeyDown(.Y) {
-                state.title.wave_params.color_phase = clamp(state.title.wave_params.color_phase + 0.01, 0.0, 1.0)
-                handle_shader_param_update(&state, .ColorPhase, state.title.wave_params.color_phase)
+                state.title.digital_noise_params.static_amount = clamp(state.title.digital_noise_params.static_amount + 0.02, 0.0, 0.5)
+                handle_shader_param_update(&state, .StaticAmount, state.title.digital_noise_params.static_amount)
             }
             if rl.IsKeyDown(.H) {
-                state.title.wave_params.color_phase = clamp(state.title.wave_params.color_phase - 0.01, 0.0, 1.0)
-                handle_shader_param_update(&state, .ColorPhase, state.title.wave_params.color_phase)
+                state.title.digital_noise_params.static_amount = clamp(state.title.digital_noise_params.static_amount - 0.02, 0.0, 0.5)
+                handle_shader_param_update(&state, .StaticAmount, state.title.digital_noise_params.static_amount)
             }
             if rl.IsKeyDown(.U) {
-                state.title.wave_params.color_spread = clamp(state.title.wave_params.color_spread + 0.01, 0.01, 2.0)
-                handle_shader_param_update(&state, .ColorSpread, state.title.wave_params.color_spread)
+                state.title.digital_noise_params.pulse_speed = clamp(state.title.digital_noise_params.pulse_speed + 0.1, 0.1, 5.0)
+                handle_shader_param_update(&state, .PulseSpeed, state.title.digital_noise_params.pulse_speed)
             }
             if rl.IsKeyDown(.J) {
-                state.title.wave_params.color_spread = clamp(state.title.wave_params.color_spread - 0.01, 0.01, 2.0)
-                handle_shader_param_update(&state, .ColorSpread, state.title.wave_params.color_spread)
+                state.title.digital_noise_params.pulse_speed = clamp(state.title.digital_noise_params.pulse_speed - 0.1, 0.1, 5.0)
+                handle_shader_param_update(&state, .PulseSpeed, state.title.digital_noise_params.pulse_speed)
             }
             if rl.IsKeyDown(.I) {
-                state.title.wave_params.color_intensity = clamp(state.title.wave_params.color_intensity + 0.01, 0.1, 2.0)
-                handle_shader_param_update(&state, .ColorIntensity, state.title.wave_params.color_intensity)
+                state.title.digital_noise_params.pulse_intensity = clamp(state.title.digital_noise_params.pulse_intensity + 0.05, 0.0, 1.0)
+                handle_shader_param_update(&state, .PulseIntensity, state.title.digital_noise_params.pulse_intensity)
             }
             if rl.IsKeyDown(.K) {
-                state.title.wave_params.color_intensity = clamp(state.title.wave_params.color_intensity - 0.01, 0.1, 2.0)
-                handle_shader_param_update(&state, .ColorIntensity, state.title.wave_params.color_intensity)
+                state.title.digital_noise_params.pulse_intensity = clamp(state.title.digital_noise_params.pulse_intensity - 0.05, 0.0, 1.0)
+                handle_shader_param_update(&state, .PulseIntensity, state.title.digital_noise_params.pulse_intensity)
             }
             
             // Clamp values to reasonable ranges
-            state.title.wave_params.speed = clamp(state.title.wave_params.speed, 0.01, 2.0)
-            state.title.wave_params.amplitude = clamp(state.title.wave_params.amplitude, 0.01, 0.5)
-            state.title.wave_params.frequency = clamp(state.title.wave_params.frequency, 0.1, 20.0)
-            state.title.wave_params.smoothness = clamp(state.title.wave_params.smoothness, 0.01, 1.0)
-            state.title.wave_params.color_speed = clamp(state.title.wave_params.color_speed, 0.01, 2.0)
-            state.title.wave_params.color_phase = clamp(state.title.wave_params.color_phase, 0.0, 1.0)
-            state.title.wave_params.color_spread = clamp(state.title.wave_params.color_spread, 0.01, 2.0)
-            state.title.wave_params.color_intensity = clamp(state.title.wave_params.color_intensity, 0.1, 2.0)
+            state.title.digital_noise_params.noise_scale = clamp(state.title.digital_noise_params.noise_scale, 0.1, 50.0)
+            state.title.digital_noise_params.glitch_intensity = clamp(state.title.digital_noise_params.glitch_intensity, 0.0, 1.0)
+            state.title.digital_noise_params.scan_line_density = clamp(state.title.digital_noise_params.scan_line_density, 0.1, 10.0)
+            state.title.digital_noise_params.tear_frequency = clamp(state.title.digital_noise_params.tear_frequency, 0.0, 0.2)
+            state.title.digital_noise_params.rgb_split_amount = clamp(state.title.digital_noise_params.rgb_split_amount, 0.0, 0.02)
+            state.title.digital_noise_params.static_amount = clamp(state.title.digital_noise_params.static_amount, 0.0, 0.5)
+            state.title.digital_noise_params.pulse_speed = clamp(state.title.digital_noise_params.pulse_speed, 0.1, 5.0)
+            state.title.digital_noise_params.pulse_intensity = clamp(state.title.digital_noise_params.pulse_intensity, 0.0, 1.0)
             
             // Update shader uniforms
-            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].wave_speed_loc, &state.title.wave_params.speed, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].wave_amplitude_loc, &state.title.wave_params.amplitude, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].wave_frequency_loc, &state.title.wave_params.frequency, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].wave_smoothness_loc, &state.title.wave_params.smoothness, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].color_speed_loc, &state.title.wave_params.color_speed, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].color_phase_loc, &state.title.wave_params.color_phase, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].color_spread_loc, &state.title.wave_params.color_spread, .FLOAT)
-            rl.SetShaderValue(state.title.shaders[4].shader, state.title.shaders[4].color_intensity_loc, &state.title.wave_params.color_intensity, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].noise_scale_loc, &state.title.digital_noise_params.noise_scale, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].glitch_intensity_loc, &state.title.digital_noise_params.glitch_intensity, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].scan_line_density_loc, &state.title.digital_noise_params.scan_line_density, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].tear_frequency_loc, &state.title.digital_noise_params.tear_frequency, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].rgb_split_amount_loc, &state.title.digital_noise_params.rgb_split_amount, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].static_amount_loc, &state.title.digital_noise_params.static_amount, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].pulse_speed_loc, &state.title.digital_noise_params.pulse_speed, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].pulse_intensity_loc, &state.title.digital_noise_params.pulse_intensity, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].glitch_color_loc, &state.title.digital_noise_params.glitch_color[0], .VEC3)
             
             if state.debug_view {
                 debug_text := fmt.tprintf(
-                    "Wave: Speed=%.2f Amp=%.2f Freq=%.2f Smooth=%.2f\nColor: Speed=%.2f Phase=%.2f Spread=%.2f Int=%.2f",
-                    state.title.wave_params.speed,
-                    state.title.wave_params.amplitude,
-                    state.title.wave_params.frequency,
-                    state.title.wave_params.smoothness,
-                    state.title.wave_params.color_speed,
-                    state.title.wave_params.color_phase,
-                    state.title.wave_params.color_spread,
-                    state.title.wave_params.color_intensity,
+                    "Digital Noise: Scale=%.2f Intensity=%.2f Scan Line Density=%.2f Tear Frequency=%.2f\nRGB Split Amount=%.3f Static Amount=%.2f Pulse Speed=%.2f Pulse Intensity=%.2f",
+                    state.title.digital_noise_params.noise_scale,
+                    state.title.digital_noise_params.glitch_intensity,
+                    state.title.digital_noise_params.scan_line_density,
+                    state.title.digital_noise_params.tear_frequency,
+                    state.title.digital_noise_params.rgb_split_amount,
+                    state.title.digital_noise_params.static_amount,
+                    state.title.digital_noise_params.pulse_speed,
+                    state.title.digital_noise_params.pulse_intensity,
                 )
                 rl.DrawText(strings.clone_to_cstring(debug_text), 10, 40, 10, rl.ColorAlpha(rl.WHITE, 0.5))
             }
@@ -677,7 +928,7 @@ main :: proc() {
                 f32(state.title.char_height)/2,
             }
             
-            // First pass: Hex Truchet shader
+            // First pass: Digital noise shader
             rl.BeginShaderMode(state.title.shaders[0].shader)
             rl.DrawTexturePro(
                 state.title.texture,
@@ -689,7 +940,7 @@ main :: proc() {
             )
             rl.EndShaderMode()
             
-            // Second pass: Raymarch shader
+            // Second pass: Hex Truchet shader
             rl.BeginShaderMode(state.title.shaders[1].shader)
             rl.DrawTexturePro(
                 state.title.texture,
@@ -701,7 +952,7 @@ main :: proc() {
             )
             rl.EndShaderMode()
             
-            // Third pass: Additional raymarch shader
+            // Third pass: Raymarch shader
             rl.BeginShaderMode(state.title.shaders[2].shader)
             rl.DrawTexturePro(
                 state.title.texture,
@@ -710,30 +961,6 @@ main :: proc() {
                 origin,
                 state.title.hover_state.rotation[i],
                 rl.ColorAlpha(state.title.hover_state.tint_color[i], state.title.shaders[2].blend_factor),
-            )
-            rl.EndShaderMode()
-            
-            // Fourth pass: Sine wave shader (applied to the final result)
-            rl.BeginShaderMode(state.title.shaders[3].shader)
-            rl.DrawTexturePro(
-                state.title.texture,
-                src_rect,
-                dest_rect,
-                origin,
-                state.title.hover_state.rotation[i],
-                rl.ColorAlpha(state.title.hover_state.tint_color[i], state.title.shaders[3].blend_factor),
-            )
-            rl.EndShaderMode()
-
-            // Fifth pass: Additional sine wave shader for enhanced effect
-            rl.BeginShaderMode(state.title.shaders[4].shader)
-            rl.DrawTexturePro(
-                state.title.texture,
-                src_rect,
-                dest_rect,
-                origin,
-                state.title.hover_state.rotation[i],
-                rl.ColorAlpha(state.title.hover_state.tint_color[i], state.title.shaders[4].blend_factor),
             )
             rl.EndShaderMode()
         }
@@ -799,11 +1026,11 @@ main :: proc() {
             rl.DrawText(strings.clone_to_cstring(debug_info), i32(z_input.rect.x), i32(z_input.rect.y - 12), 10, rl.ColorAlpha(rl.WHITE, 0.5))
         }
         
-        draw_outlined_text(state.font, "STARTING DIMENSION:", rl.Vector2{20, overworld_button.rect.y - layout.spacing}, state.font_size, 1)
+        draw_outlined_text(state.font, "STARTING DIMENSION:", rl.Vector2{20, overworld_button.rect.y - state.layout.spacing}, state.font_size, 1)
         
         // Debug visualization for dimension section header
         if state.debug_view {
-            header_bounds := rl.Rectangle{20, overworld_button.rect.y - layout.spacing, 200, state.font_size + 4}
+            header_bounds := rl.Rectangle{20, overworld_button.rect.y - state.layout.spacing, 200, state.font_size + 4}
             rl.DrawRectangleLinesEx(header_bounds, 1, rl.ColorAlpha(rl.YELLOW, 0.3))
         }
         
@@ -886,14 +1113,14 @@ main :: proc() {
         draw_outlined_text(
             state.font,
             strings.clone_to_cstring(coord_text),
-            converted_pos,
+            rl.Vector2{converted_coords.text_pos.x, converted_coords.text_pos.y},
             state.font_size * 1.2,
             1,
         )
 
         if state.clipboard.last_copied > 0 {
             feedback_text := fmt.bprintf(feedback_buffer[:], "Copied!")
-            feedback_pos := rl.Vector2{converted_pos.x + 200, converted_pos.y}
+            feedback_pos := rl.Vector2{converted_coords.text_pos.x + 200, converted_coords.text_pos.y}
             rl.DrawTextEx(
                 state.font,
                 strings.clone_to_cstring(feedback_text),
@@ -912,14 +1139,14 @@ main :: proc() {
             text_size := i32(16)    // Text size
             
             params := []struct{name: string, value: f32}{
-                {"Speed", state.title.wave_params.speed},
-                {"Amplitude", state.title.wave_params.amplitude},
-                {"Frequency", state.title.wave_params.frequency},
-                {"Smoothness", state.title.wave_params.smoothness},
-                {"Color Speed", state.title.wave_params.color_speed},
-                {"Color Phase", state.title.wave_params.color_phase},
-                {"Color Spread", state.title.wave_params.color_spread},
-                {"Color Intensity", state.title.wave_params.color_intensity},
+                {"Noise Scale", state.title.digital_noise_params.noise_scale},
+                {"Glitch Intensity", state.title.digital_noise_params.glitch_intensity},
+                {"Scan Line Density", state.title.digital_noise_params.scan_line_density},
+                {"Tear Frequency", state.title.digital_noise_params.tear_frequency},
+                {"RGB Split Amount", state.title.digital_noise_params.rgb_split_amount},
+                {"Static Amount", state.title.digital_noise_params.static_amount},
+                {"Pulse Speed", state.title.digital_noise_params.pulse_speed},
+                {"Pulse Intensity", state.title.digital_noise_params.pulse_intensity},
             }
             
             // Draw background panel
@@ -954,21 +1181,21 @@ main :: proc() {
                 
                 // Draw key hints
                 key_hint := ""
-                if param.name == "Speed" {
+                if param.name == "Noise Scale" {
                     key_hint = "Ctrl + Q/A"
-                } else if param.name == "Amplitude" {
+                } else if param.name == "Glitch Intensity" {
                     key_hint = "Ctrl + W/S"
-                } else if param.name == "Frequency" {
+                } else if param.name == "Scan Line Density" {
                     key_hint = "Ctrl + E/D"
-                } else if param.name == "Smoothness" {
+                } else if param.name == "Tear Frequency" {
                     key_hint = "Ctrl + R/F"
-                } else if param.name == "Color Speed" {
+                } else if param.name == "RGB Split Amount" {
                     key_hint = "Ctrl + T/G"
-                } else if param.name == "Color Phase" {
+                } else if param.name == "Static Amount" {
                     key_hint = "Ctrl + Y/H"
-                } else if param.name == "Color Spread" {
+                } else if param.name == "Pulse Speed" {
                     key_hint = "Ctrl + U/J"
-                } else if param.name == "Color Intensity" {
+                } else if param.name == "Pulse Intensity" {
                     key_hint = "Ctrl + I/K"
                 }
                 hint_pos_x := f32(state.window_width) - f32(rl.MeasureText(strings.clone_to_cstring(key_hint), text_size)) - margin
@@ -1046,13 +1273,16 @@ main :: proc() {
             rl.DrawText(strings.clone_to_cstring(input_text), 10, 40, 20, rl.RED)
             
             // Wave parameters debug info
-            wave_text := fmt.bprintf(debug_text[:], "Wave: speed=%.2f amp=%.2f freq=%.2f smooth=%.2f", 
-                state.title.wave_params.speed,
-                state.title.wave_params.amplitude,
-                state.title.wave_params.frequency,
-                state.title.wave_params.smoothness)
+            wave_text := fmt.bprintf(debug_text[:], "Wave: Scale=%.2f Intensity=%.2f Scan Line Density=%.2f Tear Frequency=%.2f", 
+                state.title.digital_noise_params.noise_scale,
+                state.title.digital_noise_params.glitch_intensity,
+                state.title.digital_noise_params.scan_line_density,
+                state.title.digital_noise_params.tear_frequency)
             rl.DrawText(strings.clone_to_cstring(wave_text), 10, 70, 20, rl.RED)
         }
+
+        // Update clipboard hover state
+        state.clipboard.hovered = rl.CheckCollisionPointRec(mouse_pos, converted_coords.rect)
     }
 
     // Cleanup and final save on exit

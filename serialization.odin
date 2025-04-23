@@ -26,14 +26,6 @@ SerializedState :: struct {
     },
     locations: []Location,
     shader_params: struct {
-        wave_speed: f32,
-        wave_amplitude: f32,
-        wave_frequency: f32,
-        wave_smoothness: f32,
-        color_speed: f32,
-        color_phase: f32,
-        color_spread: f32,
-        color_intensity: f32,
         // Digital noise parameters
         noise_scale: f32,
         glitch_intensity: f32,
@@ -44,6 +36,12 @@ SerializedState :: struct {
         pulse_speed: f32,
         pulse_intensity: f32,
         glitch_color: [3]f32,
+    },
+    window: struct {
+        width: i32,
+        height: i32,
+        pos_x: i32,
+        pos_y: i32,
     },
 }
 
@@ -116,16 +114,6 @@ load_state :: proc(state: ^AppState) -> (ok: bool) {
         }
     }
 
-    // Update shader parameters
-    state.title.wave_params.speed = serial_state.shader_params.wave_speed
-    state.title.wave_params.amplitude = serial_state.shader_params.wave_amplitude
-    state.title.wave_params.frequency = serial_state.shader_params.wave_frequency
-    state.title.wave_params.smoothness = serial_state.shader_params.wave_smoothness
-    state.title.wave_params.color_speed = serial_state.shader_params.color_speed
-    state.title.wave_params.color_phase = serial_state.shader_params.color_phase
-    state.title.wave_params.color_spread = serial_state.shader_params.color_spread
-    state.title.wave_params.color_intensity = serial_state.shader_params.color_intensity
-
     // Load digital noise parameters
     state.title.digital_noise_params.noise_scale = serial_state.shader_params.noise_scale
     state.title.digital_noise_params.glitch_intensity = serial_state.shader_params.glitch_intensity
@@ -137,19 +125,12 @@ load_state :: proc(state: ^AppState) -> (ok: bool) {
     state.title.digital_noise_params.pulse_intensity = serial_state.shader_params.pulse_intensity
     state.title.digital_noise_params.glitch_color = serial_state.shader_params.glitch_color
 
-    // Only update shader uniforms if shaders are initialized
-    if state.title.shaders[3].shader.id != 0 {
-        shader := &state.title.shaders[3]  // Sine wave shader
-        rl.SetShaderValue(shader.shader, shader.wave_speed_loc, &state.title.wave_params.speed, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.wave_amplitude_loc, &state.title.wave_params.amplitude, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.wave_frequency_loc, &state.title.wave_params.frequency, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.wave_smoothness_loc, &state.title.wave_params.smoothness, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.color_speed_loc, &state.title.wave_params.color_speed, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.color_phase_loc, &state.title.wave_params.color_phase, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.color_spread_loc, &state.title.wave_params.color_spread, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.color_intensity_loc, &state.title.wave_params.color_intensity, .FLOAT)
-    } else {
-        fmt.println("* Shaders not initialized yet - parameters will be applied when shaders are loaded")
+    // Load and apply window state
+    if serial_state.window.width > 0 && serial_state.window.height > 0 {
+        rl.SetWindowSize(serial_state.window.width, serial_state.window.height)
+        rl.SetWindowPosition(serial_state.window.pos_x, serial_state.window.pos_y)
+        state.window_width = serial_state.window.width
+        state.window_height = serial_state.window.height
     }
 
     // Apply digital noise parameters to shader
@@ -182,6 +163,11 @@ save_state_temp :: proc(state: ^AppState) -> bool {
     fmt.println("  X buffer:", x_str, "length:", len(x_str))
     fmt.println("  Z buffer:", z_str, "length:", len(z_str))
     
+    // Get current window state
+    window_pos := rl.GetWindowPosition()
+    window_width := rl.GetScreenWidth()
+    window_height := rl.GetScreenHeight()
+    
     // Handle empty inputs
     if len(x_str) == 0 || len(z_str) == 0 {
         // Use the converted coordinates if input is empty
@@ -198,14 +184,6 @@ save_state_temp :: proc(state: ^AppState) -> bool {
             },
             locations = state.locations.locations[:],
             shader_params = {
-                wave_speed = state.title.wave_params.speed,
-                wave_amplitude = state.title.wave_params.amplitude,
-                wave_frequency = state.title.wave_params.frequency,
-                wave_smoothness = state.title.wave_params.smoothness,
-                color_speed = state.title.wave_params.color_speed,
-                color_phase = state.title.wave_params.color_phase,
-                color_spread = state.title.wave_params.color_spread,
-                color_intensity = state.title.wave_params.color_intensity,
                 // Digital noise parameters
                 noise_scale = state.title.digital_noise_params.noise_scale,
                 glitch_intensity = state.title.digital_noise_params.glitch_intensity,
@@ -216,6 +194,12 @@ save_state_temp :: proc(state: ^AppState) -> bool {
                 pulse_speed = state.title.digital_noise_params.pulse_speed,
                 pulse_intensity = state.title.digital_noise_params.pulse_intensity,
                 glitch_color = state.title.digital_noise_params.glitch_color,
+            },
+            window = {
+                width = window_width,
+                height = window_height,
+                pos_x = i32(window_pos.x),
+                pos_y = i32(window_pos.y),
             },
         }
         
@@ -273,14 +257,6 @@ save_state_temp :: proc(state: ^AppState) -> bool {
         },
         locations = state.locations.locations[:],
         shader_params = {
-            wave_speed = state.title.wave_params.speed,
-            wave_amplitude = state.title.wave_params.amplitude,
-            wave_frequency = state.title.wave_params.frequency,
-            wave_smoothness = state.title.wave_params.smoothness,
-            color_speed = state.title.wave_params.color_speed,
-            color_phase = state.title.wave_params.color_phase,
-            color_spread = state.title.wave_params.color_spread,
-            color_intensity = state.title.wave_params.color_intensity,
             // Digital noise parameters
             noise_scale = state.title.digital_noise_params.noise_scale,
             glitch_intensity = state.title.digital_noise_params.glitch_intensity,
@@ -291,6 +267,12 @@ save_state_temp :: proc(state: ^AppState) -> bool {
             pulse_speed = state.title.digital_noise_params.pulse_speed,
             pulse_intensity = state.title.digital_noise_params.pulse_intensity,
             glitch_color = state.title.digital_noise_params.glitch_color,
+        },
+        window = {
+            width = window_width,
+            height = window_height,
+            pos_x = i32(window_pos.x),
+            pos_y = i32(window_pos.y),
         },
     }
 

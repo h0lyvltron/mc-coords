@@ -371,30 +371,30 @@ handle_location_operation :: proc(state: ^AppState, operation: LocationOperation
 handle_shader_param_update :: proc(state: ^AppState, param: ShaderParameter, value: f32) {
     old_value: f32
     switch param {
-    case .Speed:
-        old_value = state.title.wave_params.speed
-        state.title.wave_params.speed = value
-    case .Amplitude:
-        old_value = state.title.wave_params.amplitude
-        state.title.wave_params.amplitude = value
-    case .Frequency:
-        old_value = state.title.wave_params.frequency
-        state.title.wave_params.frequency = value
-    case .Smoothness:
-        old_value = state.title.wave_params.smoothness
-        state.title.wave_params.smoothness = value
-    case .ColorSpeed:
-        old_value = state.title.wave_params.color_speed
-        state.title.wave_params.color_speed = value
-    case .ColorPhase:
-        old_value = state.title.wave_params.color_phase
-        state.title.wave_params.color_phase = value
-    case .ColorSpread:
-        old_value = state.title.wave_params.color_spread
-        state.title.wave_params.color_spread = value
-    case .ColorIntensity:
-        old_value = state.title.wave_params.color_intensity
-        state.title.wave_params.color_intensity = value
+    case .NoiseScale:
+        old_value = state.title.digital_noise_params.noise_scale
+        state.title.digital_noise_params.noise_scale = value
+    case .GlitchIntensity:
+        old_value = state.title.digital_noise_params.glitch_intensity
+        state.title.digital_noise_params.glitch_intensity = value
+    case .ScanLineDensity:
+        old_value = state.title.digital_noise_params.scan_line_density
+        state.title.digital_noise_params.scan_line_density = value
+    case .TearFrequency:
+        old_value = state.title.digital_noise_params.tear_frequency
+        state.title.digital_noise_params.tear_frequency = value
+    case .RGBSplitAmount:
+        old_value = state.title.digital_noise_params.rgb_split_amount
+        state.title.digital_noise_params.rgb_split_amount = value
+    case .StaticAmount:
+        old_value = state.title.digital_noise_params.static_amount
+        state.title.digital_noise_params.static_amount = value
+    case .PulseSpeed:
+        old_value = state.title.digital_noise_params.pulse_speed
+        state.title.digital_noise_params.pulse_speed = value
+    case .PulseIntensity:
+        old_value = state.title.digital_noise_params.pulse_intensity
+        state.title.digital_noise_params.pulse_intensity = value
     }
     
     if old_value != value {
@@ -411,12 +411,12 @@ LocationOperation :: enum {
 
 // Shader parameters that can be modified
 ShaderParameter :: enum {
-    Speed,
-    Amplitude,
-    Frequency,
-    Smoothness,
-    ColorSpeed,
-    ColorPhase,
-    ColorSpread,
-    ColorIntensity,
+    NoiseScale,
+    GlitchIntensity,
+    ScanLineDensity,
+    TearFrequency,
+    RGBSplitAmount,
+    StaticAmount,
+    PulseSpeed,
+    PulseIntensity,
 }
