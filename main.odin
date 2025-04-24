@@ -22,7 +22,6 @@ AppState :: struct {
         hovered: bool,
         last_copied: f32,
     },
-    // Future enhancements
     locations: LocationDatabase,
     settings: Settings,
     layout: Layout,
@@ -32,15 +31,6 @@ AppState :: struct {
         last_auto_save: f64,  // Time of last auto-save
         auto_save_interval: f64,  // Minimum time between auto-saves in seconds
     },
-}
-
-Modal_State :: enum {
-    None,
-    ConvertCoordinates,
-    SaveLocation,
-    LoadLocation,
-    Settings,
-    Help,
 }
 
 Settings :: struct {
@@ -67,12 +57,7 @@ WINDOW_DEFAULT_FLAGS := WindowDefaultFlags {
 }
 
 BackgroundImage :: struct {
-    texture: rl.Texture2D,
-    source_rect: rl.Rectangle,
-    dest_rect: rl.Rectangle,
-    shader: rl.Shader,
-    time_loc: i32,        // Uniform location for time
-    resolution_loc: i32,  // Uniform location for resolution
+    color: rl.Color, // Replace texture and shader with a simple color
 }
 
 WindowState :: struct {
@@ -150,48 +135,7 @@ update_window_state :: proc(window: ^WindowState, state: ^AppState) {
     // Update layout
     update_layout(&state.layout, window.width, window.height)
     
-    // Update background image
-    if window.is_resizing {
-        // Calculate aspect ratio preserving dimensions
-        bg_width := f32(state.background.texture.width)
-        bg_height := f32(state.background.texture.height)
-        window_aspect := f32(window.width) / f32(window.height)
-        bg_aspect := bg_width / bg_height
-        
-        dest_width: f32
-        dest_height: f32
-        
-        if window_aspect > bg_aspect {
-            // Window is wider than background
-            dest_height = f32(window.height)
-            dest_width = dest_height * bg_aspect
-        } else {
-            // Window is taller than background
-            dest_width = f32(window.width)
-            dest_height = dest_width / bg_aspect
-        }
-        
-        // Center the background
-        x_offset := (f32(window.width) - dest_width) / 2
-        y_offset := (f32(window.height) - dest_height) / 2
-        
-        // Update background destination rectangle
-        state.background.dest_rect = rl.Rectangle{
-            x = x_offset,
-            y = y_offset,
-            width = dest_width,
-            height = dest_height,
-        }
-        
-        // Update shader resolution
-        resolution := [2]f32{f32(window.width), f32(window.height)}
-        rl.SetShaderValue(state.background.shader, state.background.resolution_loc, &resolution, .VEC2)
-        
-        // Update title shader resolutions
-        for i in 0..<len(state.title.shaders) {
-            rl.SetShaderValue(state.title.shaders[i].shader, state.title.shaders[i].resolution_loc, &resolution, .VEC2)
-        }
-    }
+    // Remove background resizing code since we're using a simple color now
 }
 
 calculate_image_crop :: proc(image_width, image_height, target_width, target_height: i32) -> rl.Rectangle {
@@ -214,42 +158,10 @@ calculate_image_crop :: proc(image_width, image_height, target_width, target_hei
     return crop
 }
 
-load_background_image :: proc(path: string, window_width, window_height: i32) -> (BackgroundImage, bool) {
-    image := rl.LoadImage(strings.clone_to_cstring(path))
-    if image.data == nil {
-        fmt.eprintln("Failed to load image:", path)
-        return BackgroundImage{}, false
-    }
-    defer rl.UnloadImage(image)
-    
-    crop := calculate_image_crop(image.width, image.height, window_width, window_height)
-    
-    texture := rl.LoadTextureFromImage(image)
-    if texture.id == 0 {
-        fmt.eprintln("Failed to create texture from image:", path)
-        return BackgroundImage{}, false
-    }
-    
-    shader := rl.LoadShaderFromMemory(BACKGROUND_VERTEX_SHADER, BACKGROUND_FRAGMENT_SHADER)
-    if shader.id == 0 {
-        fmt.eprintln("Failed to load background shader")
-        rl.UnloadTexture(texture)
-        return BackgroundImage{}, false
-    }
-    
-    time_loc := rl.GetShaderLocation(shader, "time")
-    resolution_loc := rl.GetShaderLocation(shader, "resolution")
-    
-    resolution := [2]f32{f32(window_width), f32(window_height)}
-    rl.SetShaderValue(shader, resolution_loc, &resolution, .VEC2)
-    
+load_background_image :: proc(window_width, window_height: i32) -> (BackgroundImage, bool) {
+    // Replace image loading with a simple color struct
     return BackgroundImage{
-        texture = texture,
-        source_rect = crop,
-        dest_rect = rl.Rectangle{0, 0, f32(window_width), f32(window_height)},
-        shader = shader,
-        time_loc = time_loc,
-        resolution_loc = resolution_loc,
+        color = rl.Color{15, 15, 15, 255}, // Color equivalent to#161616
     }, true
 }
 
@@ -310,23 +222,23 @@ init_app :: proc() -> AppState {
             last_auto_save = 0,
             auto_save_interval = 5.0,
         },
+        locations = LocationDatabase {
+            locations = make([dynamic]Location),
+            current_filter = "",
+            selected_index = -1,
+        },
     }
     
-    init_input_state(&state.input)
+    init_input_state(&state.input, &state.locations)
     
-    // Try to load previous state first
-    if load_state(&state) {
-        fmt.println("* Previous state loaded successfully")
-    }
-    
-    bg, ok := load_background_image("assets/tree-house.png", state.window_width, state.window_height)
+    bg, ok := load_background_image(state.window_width, state.window_height)
     if ok {
         state.background = bg
     } else {
-        fmt.eprintln("Failed to load background image")
+        fmt.eprintln("Failed to load background color")
     }
 
-    // Load title image
+    // Load title image and initialize all graphics
     title_img := rl.LoadImage(strings.clone_to_cstring("assets/title.png"))
     if title_img.data == nil {
         fmt.eprintln("! Failed to load title image")
@@ -443,12 +355,6 @@ init_app :: proc() -> AppState {
                 " Pulse Speed=", state.title.digital_noise_params.pulse_speed,
                 " Pulse Intensity=", state.title.digital_noise_params.pulse_intensity)
     
-    state.locations = LocationDatabase {
-        locations = make([dynamic]Location),
-        current_filter = "",
-        selected_index = -1,
-    }
-    
     state.settings = Settings {
         theme = "default",
         font_size = DEFAULT_FONT_SETTINGS.size,
@@ -457,6 +363,13 @@ init_app :: proc() -> AppState {
     }
     
     state.layout = DEFAULT_LAYOUT
+    
+    // Try to load previous state after all initialization is complete
+    if load_state(&state) {
+        fmt.println("* Previous state loaded successfully")
+        // Force layout update with loaded dimensions
+        update_layout(&state.layout, state.window_width, state.window_height)
+    }
     
     return state
 }
@@ -483,13 +396,7 @@ main :: proc() {
             }
         }
         
-        // Clean up background shader
-        if state.background.shader.id != 0 {
-            rl.UnloadShader(state.background.shader)
-        }
-        if state.background.texture.id != 0 {
-            rl.UnloadTexture(state.background.texture)
-        }
+        // Remove background cleanup since we're using a simple color now
         
         // Clean up locations array
         delete(state.locations.locations)
@@ -550,9 +457,18 @@ main :: proc() {
         is_hovered = false,
     }
 
-    for !rl.WindowShouldClose() {
+    // Create a variable to control the main game loop
+    should_close := false
+
+    for !should_close {
         // Update window state and handle resizing
         update_window_state(&window, &state)
+        
+        // Check for close button (but not escape key)
+        // This will still allow the window's X button to work
+        if rl.WindowShouldClose() && !rl.IsKeyPressed(.ESCAPE) {
+            should_close = true
+        }
         
         // Handle scrolling
         handle_scroll(&state.layout, rl.GetMousePosition())
@@ -571,47 +487,56 @@ main :: proc() {
         if rl.IsMouseButtonPressed(.LEFT) {
             handled_click := false
             
-            // Check clicks against section elements
-            for i in 0..<5 {
-                element := &converter_section.elements[UIElement_ID(i)]
-                if element.is_visible && rl.CheckCollisionPointRec(mouse_pos, element.bounds) {
-                    switch i {
-                    case 0: // X input
-                        if state.input.active_input != .X {
-                            fmt.println("State change: Clicked X input")
-                            state.input.active_input = .X
-                            state.input.should_clear = true
-                        }
-                    case 1: // Z input
-                        if state.input.active_input != .Z {
-                            fmt.println("State change: Clicked Z input")
-                            state.input.active_input = .Z
-                            state.input.should_clear = true
-                        }
-                    case 2: // Overworld button
-                        if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Overworld {
-                            fmt.println("State change: Clicked Overworld button")
-                            handle_dimension_click(&state, .Overworld)
-                        }
-                    case 3: // Nether button
-                        if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Nether {
-                            fmt.println("State change: Clicked Nether button")
-                            handle_dimension_click(&state, .Nether)
-                        }
-                    }
-                    handled_click = true
-                    break
-                }
-            }
-            
-            if !handled_click && state.clipboard.hovered {
-                coord_str := fmt.tprintf("%d, %d", state.coordinates.converted.x, state.coordinates.converted.z)
-                rl.SetClipboardText(strings.clone_to_cstring(coord_str))
-                state.clipboard.last_copied = 0.5 // Start feedback animation
+            // Check if we're in the location dialog
+            if is_in_location_dialog(&state.input) {
+                // Skip normal click handling, as the dialog has its own click handler
                 handled_click = true
-            } else if !handled_click && state.input.active_input != .None {
-                fmt.println("State change: Clicked outside inputs")
-                state.input.active_input = .None
+            } else {
+                // Check clicks against section elements
+                for i in 0..<5 {
+                    element := &converter_section.elements[UIElement_ID(i)]
+                    if element.is_visible && rl.CheckCollisionPointRec(mouse_pos, element.bounds) {
+                        switch i {
+                        case 0: // X input
+                            if state.input.active_input != .X {
+                                fmt.println("State change: Clicked X input")
+                                state.input.active_input = .X
+                                state.input.should_clear = true
+                            }
+                        case 1: // Z input
+                            if state.input.active_input != .Z {
+                                fmt.println("State change: Clicked Z input")
+                                state.input.active_input = .Z
+                                state.input.should_clear = true
+                            }
+                        case 2: // Overworld button
+                            if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Overworld {
+                                fmt.println("State change: Clicked Overworld button")
+                                handle_dimension_click(&state, .Overworld)
+                            }
+                        case 3: // Nether button
+                            if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Nether {
+                                fmt.println("State change: Clicked Nether button")
+                                handle_dimension_click(&state, .Nether)
+                            }
+                        }
+                        handled_click = true
+                        break
+                    }
+                }
+                
+                if !handled_click && state.clipboard.hovered {
+                    coord_str := fmt.tprintf("%d, %d", state.coordinates.converted.x, state.coordinates.converted.z)
+                    rl.SetClipboardText(strings.clone_to_cstring(coord_str))
+                    state.clipboard.last_copied = 0.5 // Start feedback animation
+                    handled_click = true
+                } else if !handled_click && state.input.active_input != .None {
+                    // Only clear input state if we're not in a dialog
+                    if !is_in_location_dialog(&state.input) {
+                        fmt.println("State change: Clicked outside inputs")
+                        state.input.active_input = .None
+                    }
+                }
             }
         }
 
@@ -635,10 +560,20 @@ main :: proc() {
             }
         }
 
+        // Handle dimension cycling with arrow keys
+        if state.input.active_input == .Dimension || state.input.active_input == .None {
+            if rl.IsKeyPressed(.RIGHT) || rl.IsKeyPressed(.LEFT) {
+                // Instead of toggling directly, set the flag to toggle once
+                state.input.needs_dimension_toggle = true
+            }
+        }
+
+        // Check and reset the dimension toggle flag
         if state.input.needs_dimension_toggle {
-            state.coordinates.source_dimension = state.coordinates.source_dimension == Dimension.Overworld ? Dimension.Nether : Dimension.Overworld
+            state.coordinates.source_dimension = state.coordinates.source_dimension == .Overworld ? .Nether : .Overworld
             state.coordinates.needs_conversion = true
             state.state_tracking.has_unsaved_changes = true
+            state.input.needs_dimension_toggle = false  // Reset flag after toggling
         }
 
         // Update converted coordinates position based on section scroll
@@ -704,20 +639,22 @@ main :: proc() {
         rl.BeginDrawing()
         defer rl.EndDrawing()
 
-        rl.ClearBackground(rl.BLACK)
+        // Replace background shader rendering with simple color fill
+        rl.ClearBackground(state.background.color)
         
         time := f32(rl.GetTime())
-        rl.SetShaderValue(state.background.shader, state.background.time_loc, &time, .FLOAT)
-        rl.BeginShaderMode(state.background.shader)
-        rl.DrawTexturePro(
-            state.background.texture,
-            state.background.source_rect,
-            state.background.dest_rect,
-            rl.Vector2{0, 0},
-            0,
-            rl.WHITE,
-        )
-        rl.EndShaderMode()
+        // Remove these lines:
+        // rl.SetShaderValue(state.background.shader, state.background.time_loc, &time, .FLOAT)
+        // rl.BeginShaderMode(state.background.shader)
+        // rl.DrawTexturePro(
+        //     state.background.texture,
+        //     state.background.source_rect,
+        //     state.background.dest_rect,
+        //     rl.Vector2{0, 0},
+        //     0,
+        //     rl.WHITE,
+        // )
+        // rl.EndShaderMode()
         
         // Draw title using the image atlas
         // Reuse the variables from above instead of redeclaring
@@ -976,7 +913,7 @@ main :: proc() {
         draw_outlined_text(state.font, "X:", rl.Vector2{x_input.label_pos.x, x_input.label_pos.y}, state.font_size, 1)
         x_box_color := rl.ColorAlpha(state.input.active_input == .X ? rl.BLUE : rl.DARKGRAY, state.input.active_input == .X ? 0.7 : 0.5)
         rl.DrawRectangleRec(x_input.rect, x_box_color)
-        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.input_buffers[0][:])), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, state.font_size, 1)
+        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.coord_buffers[0][:])), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, state.font_size, 1)
         
         // Debug visualization for X input
         if state.debug_view {
@@ -998,14 +935,14 @@ main :: proc() {
             )
             
             // Debug info
-            debug_info := fmt.tprintf("active:%v buf:%s", state.input.active_input == .X, string(state.input.input_buffers[0][:]))
+            debug_info := fmt.tprintf("active:%v buf:%s", state.input.active_input == .X, string(state.input.coord_buffers[0][:]))
             rl.DrawText(strings.clone_to_cstring(debug_info), i32(x_input.rect.x), i32(x_input.rect.y - 12), 10, rl.ColorAlpha(rl.WHITE, 0.5))
         }
         
         draw_outlined_text(state.font, "Z:", rl.Vector2{z_input.label_pos.x, z_input.label_pos.y}, state.font_size, 1)
         z_box_color := rl.ColorAlpha(state.input.active_input == .Z ? rl.BLUE : rl.DARKGRAY, state.input.active_input == .Z ? 0.7 : 0.5)
         rl.DrawRectangleRec(z_input.rect, z_box_color)
-        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.input_buffers[1][:])), rl.Vector2{z_input.text_pos.x, z_input.text_pos.y}, state.font_size, 1)
+        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.coord_buffers[1][:])), rl.Vector2{z_input.text_pos.x, z_input.text_pos.y}, state.font_size, 1)
         
         // Debug visualization for Z input (similar to X input)
         if state.debug_view {
@@ -1022,7 +959,7 @@ main :: proc() {
                 rl.ColorAlpha(rl.BLUE, 0.5),
             )
             
-            debug_info := fmt.tprintf("active:%v buf:%s", state.input.active_input == .Z, string(state.input.input_buffers[1][:]))
+            debug_info := fmt.tprintf("active:%v buf:%s", state.input.active_input == .Z, string(state.input.coord_buffers[1][:]))
             rl.DrawText(strings.clone_to_cstring(debug_info), i32(z_input.rect.x), i32(z_input.rect.y - 12), 10, rl.ColorAlpha(rl.WHITE, 0.5))
         }
         
@@ -1042,7 +979,20 @@ main :: proc() {
             overworld_color = rl.ColorAlpha(rl.BLUE, 0.7)
         }
         rl.DrawRectangleRec(overworld_button.rect, overworld_color)
-        draw_outlined_text(state.font, "OVERWORLD", rl.Vector2{overworld_button.text_pos.x, overworld_button.text_pos.y}, state.font_size, 1)
+        
+        // Properly center the Overworld text
+        overworld_text := "OVERWORLD"
+        overworld_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(overworld_text), state.font_size, 1)
+        draw_outlined_text(
+            state.font, 
+            strings.clone_to_cstring(overworld_text),
+            rl.Vector2{
+                overworld_button.rect.x + (overworld_button.rect.width - overworld_text_size.x)/2,
+                overworld_button.rect.y + (overworld_button.rect.height - overworld_text_size.y)/2
+            }, 
+            state.font_size, 
+            1
+        )
         
         // Debug visualization for Overworld button
         if state.debug_view {
@@ -1076,7 +1026,20 @@ main :: proc() {
             nether_color = rl.ColorAlpha(rl.BLUE, 0.7)
         }
         rl.DrawRectangleRec(nether_button.rect, nether_color)
-        draw_outlined_text(state.font, "NETHER", rl.Vector2{nether_button.text_pos.x, nether_button.text_pos.y}, state.font_size, 1)
+        
+        // Properly center the Nether text
+        nether_text := "NETHER"
+        nether_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(nether_text), state.font_size, 1)
+        draw_outlined_text(
+            state.font, 
+            strings.clone_to_cstring(nether_text),
+            rl.Vector2{
+                nether_button.rect.x + (nether_button.rect.width - nether_text_size.x)/2,
+                nether_button.rect.y + (nether_button.rect.height - nether_text_size.y)/2
+            }, 
+            state.font_size, 
+            1
+        )
         
         // Debug visualization for Nether button
         if state.debug_view {
@@ -1314,7 +1277,7 @@ main :: proc() {
         )
         draw_outlined_text(
             state.font,
-            strings.clone_to_cstring(string(state.input.input_buffers[2][:])),
+            strings.clone_to_cstring(string(state.input.coord_buffers[2][:])),
             rl.Vector2{search_box_rect.x + 5, search_box_rect.y + 5},
             state.font_size,
             1,
@@ -1352,7 +1315,7 @@ main :: proc() {
         rl.DrawRectangleRec(locations_list.rect, rl.ColorAlpha(rl.DARKGRAY, 0.3))
 
         // Draw locations
-        item_height := f32(80)  // Increased height for description and tags
+        item_height := f32(60)  // Reduced height since we removed tags
         content_x := locations_list.rect.x + 10
         content_width := locations_list.rect.width - 20
 
@@ -1391,19 +1354,6 @@ main :: proc() {
                 )
             }
 
-            // Draw tags (if any)
-            if len(location.tags) > 0 {
-                tags_str := fmt.tprintf("Tags: %s", strings.join(location.tags[:], ", "))
-                tags_pos := rl.Vector2{content_x + 5, item_y + 65}
-                draw_outlined_text(
-                    state.font,
-                    strings.clone_to_cstring(tags_str),
-                    tags_pos,
-                    state.font_size * 0.7,
-                    1,
-                )
-            }
-
             // Draw separator line
             line_y := item_y + item_height - 1
             rl.DrawLineEx(
@@ -1419,16 +1369,27 @@ main :: proc() {
             // Check for add button click
             if rl.CheckCollisionPointRec(mouse_pos, add_button_rect) {
                 // Clear location input buffers
-                for i in 0..<len(state.input.location_input.name) do state.input.location_input.name[i] = 0
-                for i in 0..<len(state.input.location_input.world) do state.input.location_input.world[i] = 0
-                for i in 0..<len(state.input.location_input.description) do state.input.location_input.description[i] = 0
-                for i in 0..<len(state.input.location_input.tags) do state.input.location_input.tags[i] = 0
+                for i in 0..<len(state.input.location_dialog_buffers.name) do state.input.location_dialog_buffers.name[i] = 0
+                for i in 0..<len(state.input.location_dialog_buffers.world) do state.input.location_dialog_buffers.world[i] = 0
+                for i in 0..<len(state.input.location_dialog_buffers.description) do state.input.location_dialog_buffers.description[i] = 0
+                // Clear and pre-fill coordinate buffers
+                for i in 0..<len(state.input.location_dialog_buffers.x) do state.input.location_dialog_buffers.x[i] = 0
+                for i in 0..<len(state.input.location_dialog_buffers.z) do state.input.location_dialog_buffers.z[i] = 0
+
+                x_str := fmt.bprintf(state.input.location_dialog_buffers.x[:], "%d", state.coordinates.source.x)
+                z_str := fmt.bprintf(state.input.location_dialog_buffers.z[:], "%d", state.coordinates.source.z)
+                // Ensure null termination (bprintf should handle this, but good practice)
+                state.input.location_dialog_buffers.x[len(x_str)] = 0 
+                state.input.location_dialog_buffers.z[len(z_str)] = 0
                 
                 // Pre-fill with default name
                 default_name := fmt.tprintf("Location %d", len(state.locations.locations) + 1)
-                for i := 0; i < min(len(default_name), len(state.input.location_input.name)-1); i += 1 {
-                    state.input.location_input.name[i] = default_name[i]
+                for i := 0; i < min(len(default_name), len(state.input.location_dialog_buffers.name)-1); i += 1 {
+                    state.input.location_dialog_buffers.name[i] = default_name[i]
                 }
+                
+                // Initialize the dimension to match current source dimension
+                state.input.location_dialog_dimension = state.coordinates.source_dimension
                 
                 state.input.active_input = .LocationName
                 state.input.should_clear = true
@@ -1450,48 +1411,57 @@ main :: proc() {
             }
         }
 
-        // Handle ESC key - first check if we're in a popup or active input
+        // Handle ESC key directly
         if rl.IsKeyPressed(.ESCAPE) {
-            if state.input.active_input == .LocationName || 
-               state.input.active_input == .LocationWorld || 
-               state.input.active_input == .LocationDescription || 
-               state.input.active_input == .LocationTags {
-                // Reset popup state and clear all location input buffers
+            fmt.println("* Debug: Main loop - escape key pressed")
+            // First check if we're in a dialog or input state
+            if is_in_location_dialog(&state.input) {
+                fmt.println("  - In location dialog, clearing dialog state")
+                // Reset location dialog state
+                for i in 0..<len(state.input.location_dialog_buffers.name) do state.input.location_dialog_buffers.name[i] = 0
+                for i in 0..<len(state.input.location_dialog_buffers.world) do state.input.location_dialog_buffers.world[i] = 0
+                for i in 0..<len(state.input.location_dialog_buffers.description) do state.input.location_dialog_buffers.description[i] = 0
+                for i in 0..<len(state.input.location_dialog_buffers.x) do state.input.location_dialog_buffers.x[i] = 0
+                for i in 0..<len(state.input.location_dialog_buffers.z) do state.input.location_dialog_buffers.z[i] = 0
                 state.input.active_input = .None
-                for i in 0..<len(state.input.location_input.name) do state.input.location_input.name[i] = 0
-                for i in 0..<len(state.input.location_input.world) do state.input.location_input.world[i] = 0
-                for i in 0..<len(state.input.location_input.description) do state.input.location_input.description[i] = 0
-                for i in 0..<len(state.input.location_input.tags) do state.input.location_input.tags[i] = 0
-            } else if state.input.active_input == .LocationSearch {
-                state.input.active_input = .None
-                state.locations.current_filter = ""
-            } else if state.input.active_input != .None {
-                state.input.active_input = .None
-            } else {
-                rl.CloseWindow()
+                fmt.println("  - Dialog state cleared")
+                continue
             }
-            return  // Don't process any other input this frame
+            
+            if state.input.active_input != .None {
+                fmt.println("  - In input field, clearing input state")
+                state.input.active_input = .None
+                continue
+            }
+            
+            // Only exit if explicitly requested via a dedicated exit button or menu option
+            // For now, we'll just log that escape was pressed but won't close the window
+            fmt.println("  - Escape pressed in main window, no action taken")
         }
 
-        // Handle TAB key for input field navigation
-        if rl.IsKeyPressed(.TAB) {
+        // Handle TAB key for input field navigation - only on initial press, not when held
+        if rl.IsKeyPressed(.TAB) && !state.input.tab_pressed {
+            state.input.tab_pressed = true
             shift_held := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
             
             if state.input.active_input == .LocationName || 
                state.input.active_input == .LocationWorld || 
-               state.input.active_input == .LocationDescription || 
-               state.input.active_input == .LocationTags {
+               state.input.active_input == .LocationDescription ||
+               state.input.active_input == .LocationX ||
+               state.input.active_input == .LocationZ {
                 // Handle tabbing in location input popup
                 if shift_held {
                     #partial switch state.input.active_input {
                         case .LocationName:
-                            state.input.active_input = .LocationTags
+                            state.input.active_input = .LocationZ
                         case .LocationWorld:
                             state.input.active_input = .LocationName
                         case .LocationDescription:
                             state.input.active_input = .LocationWorld
-                        case .LocationTags:
+                        case .LocationX:
                             state.input.active_input = .LocationDescription
+                        case .LocationZ:
+                            state.input.active_input = .LocationX
                     }
                 } else {
                     #partial switch state.input.active_input {
@@ -1500,11 +1470,14 @@ main :: proc() {
                         case .LocationWorld:
                             state.input.active_input = .LocationDescription
                         case .LocationDescription:
-                            state.input.active_input = .LocationTags
-                        case .LocationTags:
+                            state.input.active_input = .LocationX
+                        case .LocationX:
+                            state.input.active_input = .LocationZ
+                        case .LocationZ:
                             state.input.active_input = .LocationName
                     }
                 }
+                state.input.should_clear = false  // Don't clear when tabbing between location fields
             } else {
                 // Handle tabbing in main window
                 if shift_held {
@@ -1538,28 +1511,22 @@ main :: proc() {
                     state.input.should_clear = true
                 }
             }
-        }
-
-        // Handle dimension cycling with arrow keys
-        if state.input.active_input == .Dimension || state.input.active_input == .None {
-            if rl.IsKeyPressed(.RIGHT) || rl.IsKeyPressed(.LEFT) {
-                state.coordinates.source_dimension = state.coordinates.source_dimension == .Overworld ? .Nether : .Overworld
-                state.coordinates.needs_conversion = true
-                state.state_tracking.has_unsaved_changes = true
-            }
+        } else if rl.IsKeyReleased(.TAB) {
+            state.input.tab_pressed = false
         }
 
         // Handle text input for location popup
         if state.input.active_input == .LocationName || 
            state.input.active_input == .LocationWorld || 
-           state.input.active_input == .LocationDescription || 
-           state.input.active_input == .LocationTags {
+           state.input.active_input == .LocationDescription ||
+           state.input.active_input == .LocationX ||
+           state.input.active_input == .LocationZ {
             
             // Text input is now handled in the input state update
             // Just draw the dialog and handle mouse/key navigation
             
             dialog_width := f32(400)
-            dialog_height := f32(300)
+            dialog_height := f32(400)  // Increased height to accommodate dimension fields
             dialog_x := f32(state.window_width)/2 - dialog_width/2
             dialog_y := f32(state.window_height)/2 - dialog_height/2
             
@@ -1572,7 +1539,7 @@ main :: proc() {
             rl.DrawRectangleLinesEx(dialog_rect, 2, rl.ColorAlpha(rl.WHITE, 0.5))
             
             // Draw title
-            title := "Add New Location"
+            title := "ADD NEW LOCATION"
             title_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(title), state.font_size * 1.2, 1)
             draw_outlined_text(
                 state.font,
@@ -1587,65 +1554,165 @@ main :: proc() {
             input_y := dialog_y + 60
             input_width := dialog_width - 40
             input_height := f32(30)
+            label_offset := f32(25)  // Space between label and input box
+            field_spacing := f32(60)  // Space between fields
             
             // Name field
-            draw_outlined_text(state.font, "Name:", rl.Vector2{input_x, input_y}, state.font_size, 1)
-            name_box := rl.Rectangle{input_x, input_y + 25, input_width, input_height}
+            draw_outlined_text(state.font, "NAME:", rl.Vector2{input_x, input_y}, state.font_size, 1)
+            name_box := rl.Rectangle{input_x, input_y + label_offset, input_width, input_height}
             rl.DrawRectangleRec(name_box, rl.ColorAlpha(state.input.active_input == .LocationName ? rl.BLUE : rl.DARKGRAY, 0.5))
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(string(state.input.location_input.name[:])),
-                rl.Vector2{input_x + 5, input_y + 30},
+                strings.clone_to_cstring(string(state.input.location_dialog_buffers.name[:])),
+                rl.Vector2{input_x + 5, input_y + label_offset + 5},
                 state.font_size,
                 1,
             )
             
             // World field
-            world_y := input_y + 70
-            draw_outlined_text(state.font, "World:", rl.Vector2{input_x, world_y}, state.font_size, 1)
-            world_box := rl.Rectangle{input_x, world_y + 25, input_width, input_height}
+            world_y := input_y + field_spacing
+            draw_outlined_text(state.font, "WORLD:", rl.Vector2{input_x, world_y}, state.font_size, 1)
+            world_box := rl.Rectangle{input_x, world_y + label_offset, input_width, input_height}
             rl.DrawRectangleRec(world_box, rl.ColorAlpha(state.input.active_input == .LocationWorld ? rl.BLUE : rl.DARKGRAY, 0.5))
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(string(state.input.location_input.world[:])),
-                rl.Vector2{input_x + 5, world_y + 30},
+                strings.clone_to_cstring(string(state.input.location_dialog_buffers.world[:])),
+                rl.Vector2{input_x + 5, world_y + label_offset + 5},
                 state.font_size,
                 1,
             )
             
             // Description field
-            desc_y := world_y + 70
-            draw_outlined_text(state.font, "Description:", rl.Vector2{input_x, desc_y}, state.font_size, 1)
-            desc_box := rl.Rectangle{input_x, desc_y + 25, input_width, input_height}
+            desc_y := world_y + field_spacing
+            draw_outlined_text(state.font, "DESCRIPTION:", rl.Vector2{input_x, desc_y}, state.font_size, 1)
+            desc_box := rl.Rectangle{input_x, desc_y + label_offset, input_width, input_height}
             rl.DrawRectangleRec(desc_box, rl.ColorAlpha(state.input.active_input == .LocationDescription ? rl.BLUE : rl.DARKGRAY, 0.5))
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(string(state.input.location_input.description[:])),
-                rl.Vector2{input_x + 5, desc_y + 30},
+                strings.clone_to_cstring(string(state.input.location_dialog_buffers.description[:])),
+                rl.Vector2{input_x + 5, desc_y + label_offset + 5},
+                state.font_size,
+                1,
+            )
+
+            // Coordinate fields (X and Z)
+            coord_y := desc_y + field_spacing
+            coord_width := (input_width - state.layout.spacing) / 2 // Place X and Z side-by-side
+
+            // X Coordinate field
+            draw_outlined_text(state.font, "X:", rl.Vector2{input_x, coord_y}, state.font_size, 1)
+            x_coord_box := rl.Rectangle{input_x, coord_y + label_offset, coord_width, input_height}
+            rl.DrawRectangleRec(x_coord_box, rl.ColorAlpha(state.input.active_input == .LocationX ? rl.BLUE : rl.DARKGRAY, 0.5))
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(string(state.input.location_dialog_buffers.x[:])),
+                rl.Vector2{input_x + 5, coord_y + label_offset + 5},
+                state.font_size,
+                1,
+            )
+
+            // Z Coordinate field
+            z_input_x := input_x + coord_width + state.layout.spacing
+            draw_outlined_text(state.font, "Z:", rl.Vector2{z_input_x, coord_y}, state.font_size, 1)
+            z_coord_box := rl.Rectangle{z_input_x, coord_y + label_offset, coord_width, input_height}
+            rl.DrawRectangleRec(z_coord_box, rl.ColorAlpha(state.input.active_input == .LocationZ ? rl.BLUE : rl.DARKGRAY, 0.5))
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(string(state.input.location_dialog_buffers.z[:])),
+                rl.Vector2{z_input_x + 5, coord_y + label_offset + 5},
+                state.font_size,
+                1,
+            )
+
+            // Add dimension toggle
+            dim_y := coord_y + field_spacing
+            draw_outlined_text(state.font, "DIMENSION:", rl.Vector2{input_x, dim_y}, state.font_size, 1)
+            
+            // Dimension toggle buttons
+            dim_button_width := coord_width
+            dim_button_spacing := state.layout.spacing
+            
+            // Overworld button
+            overworld_dim_box := rl.Rectangle{input_x, dim_y + label_offset, dim_button_width, input_height}
+            overworld_dim_color := rl.ColorAlpha(
+                state.input.location_dialog_dimension == .Overworld ? rl.SKYBLUE : rl.DARKGRAY,
+                0.5
+            )
+            rl.DrawRectangleRec(overworld_dim_box, overworld_dim_color)
+            
+            // Center the text properly
+            overworld_text := "OVERWORLD"
+            overworld_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(overworld_text), state.font_size, 1)
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(overworld_text),
+                rl.Vector2{
+                    input_x + (dim_button_width - overworld_text_size.x)/2,
+                    dim_y + label_offset + (input_height - overworld_text_size.y)/2
+                },
                 state.font_size,
                 1,
             )
             
-            // Tags field
-            tags_y := desc_y + 70
-            draw_outlined_text(state.font, "Tags (comma-separated):", rl.Vector2{input_x, tags_y}, state.font_size, 1)
-            tags_box := rl.Rectangle{input_x, tags_y + 25, input_width, input_height}
-            rl.DrawRectangleRec(tags_box, rl.ColorAlpha(state.input.active_input == .LocationTags ? rl.BLUE : rl.DARKGRAY, 0.5))
+            // Nether button
+            nether_dim_box := rl.Rectangle{z_input_x, dim_y + label_offset, dim_button_width, input_height}
+            nether_dim_color := rl.ColorAlpha(
+                state.input.location_dialog_dimension == .Nether ? rl.SKYBLUE : rl.DARKGRAY,
+                0.5
+            )
+            rl.DrawRectangleRec(nether_dim_box, nether_dim_color)
+            
+            // Center the text properly
+            nether_text := "NETHER"
+            nether_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(nether_text), state.font_size, 1)
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(string(state.input.location_input.tags[:])),
-                rl.Vector2{input_x + 5, tags_y + 30},
+                strings.clone_to_cstring(nether_text),
+                rl.Vector2{
+                    z_input_x + (dim_button_width - nether_text_size.x)/2,
+                    dim_y + label_offset + (input_height - nether_text_size.y)/2
+                },
                 state.font_size,
                 1,
             )
             
-            // Instructions
-            instructions := "Press ENTER to continue, ESC to cancel, TAB to switch fields"
-            instr_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(instructions), state.font_size, 1)
+            // Add action buttons (Save/Cancel) at the bottom
+            button_y := dim_y + field_spacing
+            button_width := (input_width - state.layout.spacing) / 2 // Place Save and Cancel side-by-side
+            button_height := f32(40)
+            
+            // Cancel button (left)
+            cancel_button := rl.Rectangle{input_x, button_y + label_offset, button_width, button_height}
+            rl.DrawRectangleRec(cancel_button, rl.ColorAlpha(rl.RED, 0.5))
+            
+            // Center the Cancel text
+            cancel_text := "CANCEL"
+            cancel_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(cancel_text), state.font_size, 1)
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(instructions),
-                rl.Vector2{dialog_x + dialog_width/2 - instr_size.x/2, dialog_y + dialog_height - 40},
+                strings.clone_to_cstring(cancel_text),
+                rl.Vector2{
+                    input_x + (button_width - cancel_text_size.x)/2,
+                    button_y + label_offset + (button_height - cancel_text_size.y)/2
+                },
+                state.font_size,
+                1,
+            )
+            
+            // Save button (right)
+            save_button := rl.Rectangle{z_input_x, button_y + label_offset, button_width, button_height}
+            rl.DrawRectangleRec(save_button, rl.ColorAlpha(rl.GREEN, 0.5))
+            
+            // Center the Save text
+            save_text := "SAVE"
+            save_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(save_text), state.font_size, 1)
+            draw_outlined_text(
+                state.font,
+                strings.clone_to_cstring(save_text),
+                rl.Vector2{
+                    z_input_x + (button_width - save_text_size.x)/2,
+                    button_y + label_offset + (button_height - save_text_size.y)/2
+                },
                 state.font_size,
                 1,
             )
@@ -1653,63 +1720,72 @@ main :: proc() {
             // Handle mouse clicks on input fields
             if rl.IsMouseButtonPressed(.LEFT) {
                 mouse_pos := rl.GetMousePosition()
-                if rl.CheckCollisionPointRec(mouse_pos, name_box) {
-                    state.input.active_input = .LocationName
-                    state.input.should_clear = false
-                } else if rl.CheckCollisionPointRec(mouse_pos, world_box) {
-                    state.input.active_input = .LocationWorld
-                    state.input.should_clear = false
-                } else if rl.CheckCollisionPointRec(mouse_pos, desc_box) {
-                    state.input.active_input = .LocationDescription
-                    state.input.should_clear = false
-                } else if rl.CheckCollisionPointRec(mouse_pos, tags_box) {
-                    state.input.active_input = .LocationTags
-                    state.input.should_clear = false
+                
+                // Define the dialog bounds
+                dialog_bounds := dialog_rect
+                
+                // Check if click is inside the dialog
+                if rl.CheckCollisionPointRec(mouse_pos, dialog_bounds) {
+                    // Handle clicks on specific fields within the dialog
+                    if rl.CheckCollisionPointRec(mouse_pos, name_box) {
+                        state.input.active_input = .LocationName
+                        state.input.should_clear = false
+                    } else if rl.CheckCollisionPointRec(mouse_pos, world_box) {
+                        state.input.active_input = .LocationWorld
+                        state.input.should_clear = false
+                    } else if rl.CheckCollisionPointRec(mouse_pos, desc_box) {
+                        state.input.active_input = .LocationDescription
+                        state.input.should_clear = false
+                    } else if rl.CheckCollisionPointRec(mouse_pos, x_coord_box) {
+                        state.input.active_input = .LocationX
+                        state.input.should_clear = false // Don't clear pre-filled coords on click
+                    } else if rl.CheckCollisionPointRec(mouse_pos, z_coord_box) {
+                        state.input.active_input = .LocationZ
+                        state.input.should_clear = false // Don't clear pre-filled coords on click
+                    } else if rl.CheckCollisionPointRec(mouse_pos, overworld_dim_box) {
+                        state.input.location_dialog_dimension = .Overworld
+                    } else if rl.CheckCollisionPointRec(mouse_pos, nether_dim_box) {
+                        state.input.location_dialog_dimension = .Nether
+                    } else if rl.CheckCollisionPointRec(mouse_pos, cancel_button) {
+                        // Cancel button - close the dialog without saving
+                        state.input.active_input = .None
+                        // Clear buffers
+                        for i in 0..<len(state.input.location_dialog_buffers.name) do state.input.location_dialog_buffers.name[i] = 0
+                        for i in 0..<len(state.input.location_dialog_buffers.world) do state.input.location_dialog_buffers.world[i] = 0
+                        for i in 0..<len(state.input.location_dialog_buffers.description) do state.input.location_dialog_buffers.description[i] = 0
+                        for i in 0..<len(state.input.location_dialog_buffers.x) do state.input.location_dialog_buffers.x[i] = 0
+                        for i in 0..<len(state.input.location_dialog_buffers.z) do state.input.location_dialog_buffers.z[i] = 0
+                    } else if rl.CheckCollisionPointRec(mouse_pos, save_button) {
+                        // Save button - same functionality as pressing Enter in Z field
+                        save_location_from_dialog(&state)
+                    }
+                    // Clicks inside dialog are always handled and should not close it
+                } else {
+                    // If clicking outside the dialog, close it
+                    state.input.active_input = .None
+                    // Clear buffers
+                    for i in 0..<len(state.input.location_dialog_buffers.name) do state.input.location_dialog_buffers.name[i] = 0
+                    for i in 0..<len(state.input.location_dialog_buffers.world) do state.input.location_dialog_buffers.world[i] = 0
+                    for i in 0..<len(state.input.location_dialog_buffers.description) do state.input.location_dialog_buffers.description[i] = 0
+                    for i in 0..<len(state.input.location_dialog_buffers.x) do state.input.location_dialog_buffers.x[i] = 0
+                    for i in 0..<len(state.input.location_dialog_buffers.z) do state.input.location_dialog_buffers.z[i] = 0
                 }
             }
 
-            // Handle ENTER key in popup
-            if rl.IsKeyPressed(.ENTER) {
-                #partial switch state.input.active_input {
-                    case .LocationName:
-                        state.input.active_input = .LocationWorld
-                    case .LocationWorld:
-                        state.input.active_input = .LocationDescription
-                    case .LocationDescription:
-                        state.input.active_input = .LocationTags
-                    case .LocationTags:
-                        // Create new location
-                        name := strings.clone(string(state.input.location_input.name[:]))
-                        world := strings.clone(string(state.input.location_input.world[:]))
-                        description := strings.clone(string(state.input.location_input.description[:]))
-                        tags_str := string(state.input.location_input.tags[:])
-                        
-                        // Split tags by comma
-                        tags := make([dynamic]string)
-                        if len(tags_str) > 0 {
-                            tag_parts := strings.split(tags_str, ",")
-                            for tag in tag_parts {
-                                if len(strings.trim_space(tag)) > 0 {
-                                    append(&tags, strings.clone(strings.trim_space(tag)))
-                                }
-                            }
-                        }
-                        
-                        // Create and append location
-                        location := Location{
-                            name = name,
-                            world = world,
-                            x = state.coordinates.source.x,
-                            z = state.coordinates.source.z,
-                            dimension = state.coordinates.source_dimension,
-                            description = description,
-                            tags = tags[:],
-                        }
-                        append(&state.locations.locations, location)
-                        
-                        // Reset input state
-                        state.input.active_input = .None
-                        state.state_tracking.has_unsaved_changes = true
+            // Handle ENTER key to create location - moved to a helper function to reuse with Save button
+            if rl.IsKeyPressed(.ENTER) && state.input.active_input == .LocationZ { 
+                save_location_from_dialog(&state)
+            }
+            
+            // Handle dimension toggling with arrow keys within the dialog
+            if is_in_location_dialog(&state.input) {
+                if rl.IsKeyPressed(.LEFT) || rl.IsKeyPressed(.RIGHT) {
+                    // Toggle the dimension
+                    if state.input.location_dialog_dimension == .Overworld {
+                        state.input.location_dialog_dimension = .Nether
+                    } else {
+                        state.input.location_dialog_dimension = .Overworld
+                    }
                 }
             }
         }
@@ -1731,5 +1807,62 @@ main :: proc() {
         } else {
             fmt.eprintln("! Failed to clean up temporary files during exit")
         }
+    }
+}
+
+// Helper function to save a location from the dialog
+save_location_from_dialog :: proc(state: ^AppState) {
+    // Parse coordinates from dialog input buffers
+    x_str := string_from_bytes(state.input.location_dialog_buffers.x[:])
+    z_str := string_from_bytes(state.input.location_dialog_buffers.z[:])
+    
+    x_val, x_ok := strconv.parse_int(x_str)
+    z_val, z_ok := strconv.parse_int(z_str)
+
+    if !x_ok || !z_ok {
+        fmt.eprintln("! Error parsing coordinates from dialog input")
+        // Optionally provide user feedback here
+    } else {
+        // Input validation for name and world
+        name_str := string_from_bytes(state.input.location_dialog_buffers.name[:])
+        world_str := string_from_bytes(state.input.location_dialog_buffers.world[:])
+        
+        if len(name_str) == 0 {
+            // Set default name if empty
+            name_str = fmt.tprintf("Location %d", len(state.locations.locations) + 1)
+            for i := 0; i < min(len(name_str), len(state.input.location_dialog_buffers.name)-1); i += 1 {
+                state.input.location_dialog_buffers.name[i] = name_str[i]
+            }
+            state.input.location_dialog_buffers.name[min(len(name_str), len(state.input.location_dialog_buffers.name)-1)] = 0
+        }
+        
+        if len(world_str) == 0 {
+            // Set default world if empty
+            world_str = "world"
+            for i := 0; i < min(len(world_str), len(state.input.location_dialog_buffers.world)-1); i += 1 {
+                state.input.location_dialog_buffers.world[i] = world_str[i]
+            }
+            state.input.location_dialog_buffers.world[min(len(world_str), len(state.input.location_dialog_buffers.world)-1)] = 0
+        }
+        
+        // Create new location using parsed coordinates
+        name := strings.clone(string_from_bytes(state.input.location_dialog_buffers.name[:]))
+        world := strings.clone(string_from_bytes(state.input.location_dialog_buffers.world[:]))
+        description := strings.clone(string_from_bytes(state.input.location_dialog_buffers.description[:]))
+        
+        // Create and append location with the selected dimension
+        location := Location{
+            name = name,
+            world = world,
+            x = i32(x_val), // Use parsed value from dialog
+            z = i32(z_val), // Use parsed value from dialog
+            dimension = state.input.location_dialog_dimension, // Use dialog dimension setting
+            description = description,
+        }
+        append(&state.locations.locations, location)
+        
+        // Reset input state
+        state.input.active_input = .None
+        state.state_tracking.has_unsaved_changes = true
     }
 }

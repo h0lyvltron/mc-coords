@@ -5,7 +5,15 @@ import "core:strings"
 import "core:strconv"
 import rl "vendor:raylib"
 
-InputBox :: enum {
+// Define maximum buffer sizes
+LOCATION_NAME_MAX :: 64
+LOCATION_WORLD_MAX :: 64
+LOCATION_DESCRIPTION_MAX :: 256
+LOCATION_COORD_MAX :: 16 // For location dialog coordinates
+MAIN_COORD_MAX :: 16 // For main X, Z coordinates
+LOCATION_SEARCH_MAX :: 128
+
+InputType :: enum {
     None,
     X,
     Z,
@@ -14,7 +22,49 @@ InputBox :: enum {
     LocationName,
     LocationWorld,
     LocationDescription,
-    LocationTags,
+    LocationX,  // New: for location dialog coordinate input
+    LocationZ,  // New: for location dialog coordinate input
+    RenameLocation, // For renaming a location in place
+}
+
+is_in_location_dialog :: proc(state: ^InputState) -> bool {
+    return state.active_input == .LocationName ||
+           state.active_input == .LocationWorld ||
+           state.active_input == .LocationDescription ||
+           state.active_input == .LocationX ||
+           state.active_input == .LocationZ
+}
+
+is_in_main_input :: proc(state: ^InputState) -> bool {
+    return state.active_input == .X ||
+           state.active_input == .Z ||
+           state.active_input == .Dimension
+}
+
+handle_escape :: proc(state: ^InputState) -> (handled: bool, should_exit: bool) {
+    // First check if we're in any modal dialog
+    if is_in_location_dialog(state) {
+        // Reset location dialog state
+        state.location_dialog_buffers.name[0] = 0
+        state.location_dialog_buffers.world[0] = 0
+        state.location_dialog_buffers.description[0] = 0
+        state.location_dialog_buffers.x[0] = 0
+        state.location_dialog_buffers.z[0] = 0
+        // Reset location dialog dimension back to current source dimension
+        state.location_dialog_dimension = .Overworld
+        state.active_input = .None
+        return true, false  // Handled, don't exit
+    }
+    
+    // Then check for search or other input states
+    if state.active_input != .None {
+        state.active_input = .None
+        return true, false  // Handled, don't exit
+    }
+    
+    // If we're not in any modal state or input state, don't do anything special
+    // but don't exit the program either
+    return false, false  // Not handled, don't exit
 }
 
 InputAction :: enum {
@@ -53,22 +103,34 @@ KeyBinding :: struct {
     action: InputAction,
 }
 
+LocationDialogInputBuffers :: struct {
+    name:        [LOCATION_NAME_MAX]u8,
+    world:       [LOCATION_WORLD_MAX]u8,
+    description: [LOCATION_DESCRIPTION_MAX]u8,
+    x:           [LOCATION_COORD_MAX]u8,
+    z:           [LOCATION_COORD_MAX]u8,
+}
+
 InputState :: struct {
-    active_input: InputBox,
-    input_buffers: [3][32]u8,  // For X, Z coordinates
-    location_input: struct {    // New location input buffers
-        name: [64]u8,
-        world: [64]u8,
-        description: [256]u8,
-        tags: [128]u8,
-    },
-    key_states: map[rl.KeyboardKey]bool,
+    active_input: InputType,
+    coord_buffers: [3][MAIN_COORD_MAX]u8,       // For X, Z coordinates and Dimension in main view
+    search_buffer: [LOCATION_SEARCH_MAX]u8, // For the main search bar
+    
+    location_dialog_buffers: LocationDialogInputBuffers,
+    location_dialog_dimension: Dimension,  // Track selected dimension in the location dialog
+    
+    rename_buffer: [LOCATION_NAME_MAX]u8, // Buffer for renaming a location
+    rename_location_index: int,          // Index of the location being renamed
+
+    key_states: map[rl.KeyboardKey]KeyState, // Use KeyState for handling repeats
     should_clear: bool,
     mouse: rl.Vector2,
     key_bindings: [dynamic]KeyBinding,
     needs_dimension_toggle: bool,
-    last_backspace: f64,  // Time of last backspace for repeat handling
-    text_input_active: bool,  // Track if we're in text input mode
+    last_backspace: f64,
+    text_input_active: bool,
+    tab_pressed: bool,  // Track tab key press state to prevent repeats
+    locations: ^LocationDatabase,  // Reference to the locations database
 }
 
 KeyConfig :: struct {
@@ -88,25 +150,42 @@ DEFAULT_KEY_CONFIG := KeyConfig{
     repeat_rate = 0.05,   // 50ms between repeats
 }
 
-init_input_state :: proc(state: ^InputState) {
+init_input_state :: proc(state: ^InputState, locations: ^LocationDatabase) {
     state.key_bindings = make([dynamic]KeyBinding)
-    state.key_states = make(map[rl.KeyboardKey]bool)
+    state.key_states = make(map[rl.KeyboardKey]KeyState) // Initialize map
     state.active_input = .None
     state.should_clear = false
     state.needs_dimension_toggle = false
     state.text_input_active = false
+    state.tab_pressed = false
+    state.locations = locations
+    state.rename_location_index = -1 // Initialize rename index
+    state.location_dialog_dimension = .Overworld // Default dimension for new locations
+
+    // Initialize main input buffers by setting the first byte to 0 (null terminator)
+    state.coord_buffers[0][0] = 0 // X coord
+    state.coord_buffers[1][0] = 0 // Z coord
+    state.coord_buffers[2][0] = 0 // Dimension (assuming it uses the same buffer type for now)
+    state.search_buffer[0] = 0 
     
-    // Initialize location input buffers
-    for i in 0..<len(state.location_input.name) do state.location_input.name[i] = 0
-    for i in 0..<len(state.location_input.world) do state.location_input.world[i] = 0
-    for i in 0..<len(state.location_input.description) do state.location_input.description[i] = 0
-    for i in 0..<len(state.location_input.tags) do state.location_input.tags[i] = 0
+    // Initialize location dialog input buffers
+    state.location_dialog_buffers.name[0] = 0
+    state.location_dialog_buffers.world[0] = 0
+    state.location_dialog_buffers.description[0] = 0
+    state.location_dialog_buffers.x[0] = 0
+    state.location_dialog_buffers.z[0] = 0
+
+    // Initialize rename buffer
+    state.rename_buffer[0] = 0
     
-    state.key_states[.BACKSPACE] = true
-    state.key_states[.LEFT] = true
-    state.key_states[.RIGHT] = true
-    state.key_states[.TAB] = true
-    
+    // Set up key states for repeatable keys
+    state.key_states[rl.KeyboardKey.BACKSPACE] = KeyState{config = DEFAULT_KEY_CONFIG}
+    state.key_states[rl.KeyboardKey.LEFT]      = KeyState{config = DEFAULT_KEY_CONFIG}
+    state.key_states[rl.KeyboardKey.RIGHT]     = KeyState{config = DEFAULT_KEY_CONFIG}
+    state.key_states[rl.KeyboardKey.TAB]       = KeyState{config = DEFAULT_KEY_CONFIG}
+    state.key_states[rl.KeyboardKey.ESCAPE]    = KeyState{config = DEFAULT_KEY_CONFIG}
+
+    // Set up key bindings
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.W, .Move_Up})
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.S, .Move_Down})
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.A, .Move_Left})
@@ -114,7 +193,7 @@ init_input_state :: proc(state: ^InputState) {
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.SPACE, .Jump})
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.E, .Interact})
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.TAB, .FocusNext})
-    append(&state.key_bindings, KeyBinding{rl.KeyboardKey.ESCAPE, .ClearFocus})
+    append(&state.key_bindings, KeyBinding{rl.KeyboardKey.ESCAPE, .Toggle_Menu})  // Change to Toggle_Menu
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.LEFT, .PreviousDimension})
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.RIGHT, .NextDimension})
     append(&state.key_bindings, KeyBinding{rl.KeyboardKey.ENTER, .Enter})
@@ -161,36 +240,59 @@ update_key_state :: proc(state: ^KeyState, is_down: bool, current_time: f32) -> 
 
 handle_numeric_input :: proc(state: ^InputState, key: rune) -> bool {
     if state.active_input == .X || state.active_input == .Z {
-        buffer := &state.input_buffers[state.active_input == .X ? 0 : 1]
-        
-        if (key >= '0' && key <= '9') || (key == '-') {
-            i: int = 0
-            for i < len(buffer) && buffer[i] != 0 {
-                i += 1
-            }
-            
-            if i >= 9 {
-                return false
-            }
-            
-            if i < len(buffer) - 1 { // Leave room for null terminator
-                if state.should_clear {
-                    for j := 0; j < len(buffer); j += 1 {
-                        buffer[j] = 0
-                    }
-                    i = 0
-                    state.should_clear = false
-                }
-                
-                if key == '-' && i > 0 do return false
-                
-                buffer[i] = u8(key)
-                buffer[i+1] = 0
-                return true
-            }
+        buffer := &state.coord_buffers[state.active_input == .X ? 0 : 1]
+        result := handle_coordinate_input(buffer[:], key, state.should_clear)
+        if result {
+            state.should_clear = false  // Reset the flag after successful input
         }
+        return result
+    } else if state.active_input == .LocationX || state.active_input == .LocationZ {
+        buffer := state.active_input == .LocationX ? &state.location_dialog_buffers.x : &state.location_dialog_buffers.z
+        result := handle_coordinate_input(buffer[:], key, state.should_clear)
+        if result {
+            state.should_clear = false  // Reset the flag after successful input
+        }
+        return result
     }
     return false
+}
+
+handle_coordinate_input :: proc(buffer: []u8, key: rune, should_clear: bool) -> bool {
+    max_len := len(buffer) - 1 // Leave space for null terminator
+    current_len := 0
+    for ; current_len < len(buffer) && buffer[current_len] != 0; current_len += 1 {}
+
+    if (key >= '0' && key <= '9') || (key == '-' && current_len == 0 && !should_clear) { // Allow '-' only at start if not clearing
+        // If we should clear the buffer, do it before adding the new character
+        if should_clear {
+             fmt.println("Clearing coordinate buffer")
+            for j := 0; j < len(buffer); j += 1 {
+                buffer[j] = 0
+            }
+            current_len = 0 // Reset length after clearing
+            // Now add the first character
+            if key == '-' || (key >= '0' && key <= '9') {
+                 if max_len > 0 { // Check if buffer has space
+                     buffer[0] = u8(key)
+                     buffer[1] = 0 // Null terminate
+                     fmt.printf("Buffer cleared and updated: %s\n", cstring(&buffer[0]))
+                     return true
+                 }
+            }
+             fmt.println("Cannot add char after clear (buffer too small?)")
+            return false // Cannot add char if buffer is size 0 or 1 after clear
+        }
+
+        // Append character if not clearing and space allows
+        if current_len < max_len {
+            buffer[current_len] = u8(key)
+            buffer[current_len+1] = 0 // Null terminate
+            fmt.printf("Buffer updated: %s\n", cstring(&buffer[0]))
+            return true // Character added
+        }
+    }
+     fmt.println("Coordinate character not added (invalid or buffer full)")
+    return false // Character not added
 }
 
 handle_text_input :: proc(state: ^InputState) -> bool {
@@ -203,17 +305,23 @@ handle_text_input :: proc(state: ^InputState) -> bool {
 
     #partial switch state.active_input {
         case .LocationName:
-            current_buffer = state.location_input.name[:]
-            max_len = len(state.location_input.name) - 1
+            current_buffer = state.location_dialog_buffers.name[:]
+            max_len = len(state.location_dialog_buffers.name) - 1
         case .LocationWorld:
-            current_buffer = state.location_input.world[:]
-            max_len = len(state.location_input.world) - 1
+            current_buffer = state.location_dialog_buffers.world[:]
+            max_len = len(state.location_dialog_buffers.world) - 1
         case .LocationDescription:
-            current_buffer = state.location_input.description[:]
-            max_len = len(state.location_input.description) - 1
-        case .LocationTags:
-            current_buffer = state.location_input.tags[:]
-            max_len = len(state.location_input.tags) - 1
+            current_buffer = state.location_dialog_buffers.description[:]
+            max_len = len(state.location_dialog_buffers.description) - 1
+        case .LocationX:
+            current_buffer = state.location_dialog_buffers.x[:]
+            max_len = len(state.location_dialog_buffers.x) - 1
+        case .LocationZ:
+            current_buffer = state.location_dialog_buffers.z[:]
+            max_len = len(state.location_dialog_buffers.z) - 1
+        case .LocationSearch:
+            current_buffer = state.search_buffer[:]  // Search buffer
+            max_len = len(state.search_buffer) - 1
         case:
             return false
     }
@@ -241,6 +349,11 @@ handle_text_input :: proc(state: ^InputState) -> bool {
             current_buffer[text_len] = u8(char)
             current_buffer[text_len + 1] = 0  // Ensure null termination
             text_len += 1
+            
+            // Update filter if this is the search field
+            if state.active_input == .LocationSearch {
+                state.locations.current_filter = string(current_buffer[:text_len])
+            }
         }
         char = rl.GetCharPressed()
     }
@@ -251,6 +364,11 @@ handle_text_input :: proc(state: ^InputState) -> bool {
             text_len -= 1  // Move back one character
             current_buffer[text_len] = 0  // Set current character to null
             state.last_backspace = rl.GetTime()
+            
+            // Update filter if this is the search field
+            if state.active_input == .LocationSearch {
+                state.locations.current_filter = string(current_buffer[:text_len])
+            }
         }
     }
 
@@ -260,25 +378,122 @@ handle_text_input :: proc(state: ^InputState) -> bool {
 update_input_state :: proc(state: ^InputState) -> bool {
     current_time := f32(rl.GetTime())
     
+    // Direct escape key handling
+    if rl.IsKeyPressed(.ESCAPE) {
+        fmt.println("* Debug: Input state - escape key pressed")
+        if is_in_location_dialog(state) {
+            fmt.println("  - In location dialog, clearing dialog state")
+            // Reset location dialog state
+            state.location_dialog_buffers.name[0] = 0
+            state.location_dialog_buffers.world[0] = 0
+            state.location_dialog_buffers.description[0] = 0
+            state.location_dialog_buffers.x[0] = 0
+            state.location_dialog_buffers.z[0] = 0
+            state.active_input = .None
+            return true
+        }
+        
+        if state.active_input != .None {
+            fmt.println("  - In input field, clearing input state")
+            state.active_input = .None
+            return true
+        }
+        
+        fmt.println("  - No input states to handle")
+        return false
+    }
+
     state.mouse = rl.GetMousePosition()
     
     // Update text input active state
     state.text_input_active = state.active_input == .LocationName || 
                             state.active_input == .LocationWorld || 
-                            state.active_input == .LocationDescription || 
-                            state.active_input == .LocationTags
+                            state.active_input == .LocationDescription ||
+                            state.active_input == .LocationSearch ||
+                            state.active_input == .LocationX ||
+                            state.active_input == .LocationZ
 
     if state.text_input_active {
-        handle_text_input(state)
+        if state.active_input == .LocationSearch {
+            // Handle search input
+            char := rl.GetCharPressed()
+            for char != 0 {
+                if char >= 32 && char <= 126 {  // Printable characters
+                    if state.should_clear {
+                        for i in 0..<len(state.search_buffer) do state.search_buffer[i] = 0
+                        state.should_clear = false
+                    }
+                    
+                    // Find end of current text
+                    i := 0
+                    for i < len(state.search_buffer) && state.search_buffer[i] != 0 {
+                        i += 1
+                    }
+                    
+                    if i < len(state.search_buffer) - 1 {
+                        state.search_buffer[i] = u8(char)
+                        state.search_buffer[i + 1] = 0
+                        state.locations.current_filter = string(state.search_buffer[:i+1])
+                    }
+                }
+                char = rl.GetCharPressed()
+            }
+            
+            // Handle backspace for search
+            if rl.IsKeyPressed(.BACKSPACE) || (rl.IsKeyDown(.BACKSPACE) && rl.GetTime() - state.last_backspace > 0.12) {
+                i := 0
+                for i < len(state.search_buffer) && state.search_buffer[i] != 0 {
+                    i += 1
+                }
+                if i > 0 {
+                    state.search_buffer[i-1] = 0
+                    state.locations.current_filter = string(state.search_buffer[:i-1])
+                    state.last_backspace = rl.GetTime()
+                }
+            }
+            return true
+        } else {
+            handle_text_input(state)
+        }
+    }
+
+    // Handle Enter key for location fields
+    if rl.IsKeyPressed(.ENTER) {
+        if state.active_input == .LocationName {
+            state.active_input = .LocationWorld
+            return true
+        } else if state.active_input == .LocationWorld {
+            state.active_input = .LocationDescription
+            return true
+        }
+        // LocationDescription Enter is handled in main.odin for creating the location
     }
 
     for key, &key_state in &state.key_states {
-        if update_key_state(&KeyState{is_held = key_state, config = DEFAULT_KEY_CONFIG}, rl.IsKeyDown(key), current_time) {
+        if update_key_state(&key_state, rl.IsKeyDown(key), current_time) {
             action := get_action_for_key(state, key)
             #partial switch action {
+            case .Toggle_Menu:  // Handle escape through the action system
+                fmt.println("* Debug: Toggle_Menu action triggered")
+                if is_in_location_dialog(state) {
+                    fmt.println("  - Handling location dialog escape")
+                    // Reset location dialog state
+                    state.location_dialog_buffers.name[0] = 0
+                    state.location_dialog_buffers.world[0] = 0
+                    state.location_dialog_buffers.description[0] = 0
+                    state.location_dialog_buffers.x[0] = 0
+                    state.location_dialog_buffers.z[0] = 0
+                    state.active_input = .None
+                    return true
+                } else if state.active_input != .None {
+                    fmt.println("  - Clearing active input:", state.active_input)
+                    state.active_input = .None
+                    return true
+                }
+                fmt.println("  - No modal state to handle")
             case .Backspace:
                 if state.active_input == .X || state.active_input == .Z {
-                    buffer := &state.input_buffers[state.active_input == .X ? 0 : 1]
+                    buffer := &state.coord_buffers[state.active_input == .X ? 0 : 1]
                     if buffer[0] != 0 {
                         i: int = 0
                         for i < len(buffer) && buffer[i] != 0 {
@@ -291,40 +506,15 @@ update_input_state :: proc(state: ^InputState) -> bool {
                     }
                 }
             case .FocusNext:
-                if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
-                    #partial switch state.active_input {
-                        case .X:
-                            state.active_input = .Dimension
-                        case .Z:
-                            state.active_input = .X
-                        case .Dimension:
-                            state.active_input = .Z
-                        case .None:
-                            state.active_input = .Dimension
-                    }
-                } else {
-                    #partial switch state.active_input {
-                        case .X:
-                            state.active_input = .Z
-                        case .Z:
-                            state.active_input = .Dimension
-                        case .Dimension:
-                            state.active_input = .X
-                        case .None:
-                            state.active_input = .X
-                    }
-                }
-                state.should_clear = state.active_input == .X || state.active_input == .Z
+                // Don't handle tab via the action system, defer to the main loop
+                // which properly handles the tab_pressed flag
+                return false
             case .PreviousDimension, .NextDimension:
                 if state.active_input == .Dimension {
                     state.needs_dimension_toggle = true
                 }
             }
         }
-    }
-    
-    if rl.IsKeyPressed(.ESCAPE) {
-        state.active_input = .None
     }
     
     key := rl.GetCharPressed()
@@ -404,8 +594,8 @@ update_coordinates_from_input :: proc(input: ^InputState, coords: ^CoordinateSta
     }
     
     // Parse input buffers to integers
-    x_str := strings.trim_right(string(input.input_buffers[0][:]), "\x00")
-    z_str := strings.trim_right(string(input.input_buffers[1][:]), "\x00")
+    x_str := strings.trim_right(string(input.coord_buffers[0][:]), "\x00")
+    z_str := strings.trim_right(string(input.coord_buffers[1][:]), "\x00")
     
     if len(x_str) == 0 || len(z_str) == 0 {
         return
@@ -422,7 +612,7 @@ update_coordinates_from_input :: proc(input: ^InputState, coords: ^CoordinateSta
     old_x := coords.source.x
     old_z := coords.source.z
     
-    update_coordinates(coords, x, z)
+    update_coordinates(coords, i32(x), i32(z))
     
     if old_x != coords.source.x || old_z != coords.source.z {
         state.state_tracking.has_unsaved_changes = true

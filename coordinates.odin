@@ -10,7 +10,7 @@ Dimension :: enum {
 }
 
 CoordinatePair :: struct {
-    x, z: int,
+    x, z: i32,
     dimension: Dimension,
 }
 
@@ -47,7 +47,7 @@ get_converted_coordinates :: proc(coords: ^CoordinateState) {
     coords.needs_conversion = false
 }
 
-update_coordinates :: proc(state: ^CoordinateState, x: int, z: int) {
+update_coordinates :: proc(state: ^CoordinateState, x: i32, z: i32) {
     if x != state.source.x || z != state.source.z {
         state.source.x = x
         state.source.z = z
@@ -62,7 +62,7 @@ update_dimension :: proc(state: ^CoordinateState, dimension: Dimension) {
     }
 }
 
-convert_coordinate_value :: proc(x: int, dimension: Dimension) -> int {
+convert_coordinate_value :: proc(x: i32, dimension: Dimension) -> i32 {
     switch dimension {
     case .Overworld:
         return x / 8

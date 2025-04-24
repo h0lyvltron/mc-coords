@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:strconv"
+import "core:math"
 import rl "vendor:raylib"
 
 // SerializationError represents possible errors during save/load operations
@@ -20,16 +21,18 @@ SerializationError :: enum {
 // SerializedLocation represents a location for serialization
 SerializedLocation :: struct {
     name: string,
-    x: int,
-    z: int,
+    world: string,
+    x: i32,
+    z: i32,
     dimension: Dimension,
+    description: string,
 }
 
 // SerializedState represents the data we want to save/load
 SerializedState :: struct {
     coordinates: struct {
-        input_x: int,  // Store as numbers instead of strings
-        input_z: int,
+        input_x: i32,  // Changed from int to i32
+        input_z: i32,  // Changed from int to i32
         dimension: Dimension,
     },
     locations: []SerializedLocation,
@@ -65,31 +68,119 @@ cleanup_temp_files :: proc() -> bool {
 }
 
 // Load state from JSON file
-load_state :: proc(state: ^AppState) -> (ok: bool) {
-    context.allocator = context.temp_allocator
-    
-    // Try to read the state file
-    data, read_ok := os.read_entire_file("state.json")
-    if !read_ok {
-        fmt.eprintln("! No saved state file found")
+load_state :: proc(state: ^AppState) -> bool {
+    // Try to read state file
+    data, ok := os.read_entire_file("state.json")
+    if !ok {
+        fmt.println("No existing state file found")
         return false
     }
     defer delete(data)
 
-    fmt.println("* Debug: Loading JSON data:", string(data))
-
-    // Parse JSON
+    // Parse JSON data
     serial_state: SerializedState
-    unmarshal_err := json.unmarshal(data, &serial_state)
-    if unmarshal_err != nil {
-        fmt.eprintln("! Failed to parse state file:", unmarshal_err)
+    err := json.unmarshal(data, &serial_state)
+    if err != nil {
+        fmt.eprintln("Failed to parse state file:", err)
         return false
     }
+    defer {
+        for loc in serial_state.locations {
+            delete(loc.name)
+            delete(loc.world)
+            delete(loc.description)
+        }
+        delete(serial_state.locations)
+    }
+
+    // Store texture and shader data
+    old_background := state.background
+    old_title := state.title
+    old_font := state.font
+    old_font_size := state.font_size
+    old_layout := state.layout
+    old_input := state.input
+    
+    // Need to store locations before clearing state
+    old_locations := state.locations
+    
+    // Clear state but preserve graphics resources and UI state
+    state^ = AppState{
+        background = old_background,
+        title = old_title,
+        font = old_font,
+        font_size = old_font_size,
+        layout = old_layout,
+        input = old_input,
+        locations = old_locations, // Keep the reference but we'll clean the contents
+    }
+    
+    // Clean up existing locations
+    for location in state.locations.locations {
+        delete(location.name)
+        delete(location.world) 
+        delete(location.description)
+    }
+    clear(&state.locations.locations)
+    
+    // Debug info
+    fmt.println("* Loading", len(serial_state.locations), "locations from saved state")
+
+    // Copy locations
+    for location in serial_state.locations {
+        add_location := Location{
+            name = strings.clone(location.name),
+            world = strings.clone(location.world),
+            description = strings.clone(location.description),
+            x = location.x,
+            z = location.z,
+            dimension = location.dimension,
+        }
+        append(&state.locations.locations, add_location)
+    }
+
+    // Debug information about loaded locations
+    if len(state.locations.locations) > 0 {
+        fmt.println("* Successfully loaded", len(state.locations.locations), "locations:")
+        for i in 0..<min(len(state.locations.locations), 5) { // Show up to 5 locations for brevity
+            fmt.println("  -", state.locations.locations[i].name, "at", 
+                       state.locations.locations[i].x, ",", 
+                       state.locations.locations[i].z, 
+                       "(", state.locations.locations[i].dimension, ")")
+        }
+        if len(state.locations.locations) > 5 {
+            fmt.println("  ... and", len(state.locations.locations) - 5, "more")
+        }
+    } else {
+        fmt.println("* No locations were loaded from the state file")
+    }
+
+    // Copy window state and update Raylib window
+    state.window_width = serial_state.window.width
+    state.window_height = serial_state.window.height
+    
+    // Ensure window size is at least the minimum
+    if state.window_width < 400 do state.window_width = 400
+    if state.window_height < 300 do state.window_height = 300
+    
+    // Update Raylib window size
+    rl.SetWindowSize(state.window_width, state.window_height)
+    
+    // Restore window position from saved state
+    if serial_state.window.pos_x != 0 && serial_state.window.pos_y != 0 {
+        rl.SetWindowPosition(serial_state.window.pos_x, serial_state.window.pos_y)
+        fmt.println("* Restored window position:", serial_state.window.pos_x, serial_state.window.pos_y)
+    }
+    
+    // Update layout with new window dimensions
+    update_layout(&state.layout, state.window_width, state.window_height)
+    
+    // No need to update the background color, as it's just a simple color value
 
     // Clear existing buffers by setting to zero
-    for i in 0..<len(state.input.input_buffers[0]) {
-        state.input.input_buffers[0][i] = 0
-        state.input.input_buffers[1][i] = 0
+    for i in 0..<len(state.input.coord_buffers[0]) {
+        state.input.coord_buffers[0][i] = 0
+        state.input.coord_buffers[1][i] = 0
     }
     
     // Convert integers back to strings
@@ -99,42 +190,20 @@ load_state :: proc(state: ^AppState) -> (ok: bool) {
     fmt.println("* Debug: Loading coordinates:", x_str, z_str)
     
     // Copy input values into buffers
-    for i in 0..<min(len(x_str), len(state.input.input_buffers[0])) {
-        state.input.input_buffers[0][i] = x_str[i]
+    for i in 0..<min(len(x_str), len(state.input.coord_buffers[0])) {
+        state.input.coord_buffers[0][i] = x_str[i]
     }
-    for i in 0..<min(len(z_str), len(state.input.input_buffers[1])) {
-        state.input.input_buffers[1][i] = z_str[i]
+    for i in 0..<min(len(z_str), len(state.input.coord_buffers[1])) {
+        state.input.coord_buffers[1][i] = z_str[i]
     }
     
     // Update source coordinates and dimension
-    state.coordinates.source.x = serial_state.coordinates.input_x
-    state.coordinates.source.z = serial_state.coordinates.input_z
+    state.coordinates.source.x = i32(serial_state.coordinates.input_x)
+    state.coordinates.source.z = i32(serial_state.coordinates.input_z)
     state.coordinates.source_dimension = serial_state.coordinates.dimension
     
     // Trigger conversion
     state.coordinates.needs_conversion = true
-    
-    // Load locations
-    if len(serial_state.locations) > 0 {
-        // Clear existing locations
-        if len(state.locations.locations) > 0 {
-            for location in state.locations.locations {
-                delete(location.name)
-            }
-            clear(&state.locations.locations)
-        }
-        
-        // Load new locations
-        for serialized_loc in serial_state.locations {
-            location := Location{
-                name = strings.clone(serialized_loc.name),
-                x = serialized_loc.x,
-                z = serialized_loc.z,
-                dimension = serialized_loc.dimension,
-            }
-            append(&state.locations.locations, location)
-        }
-    }
 
     // Load digital noise parameters
     state.title.digital_noise_params.noise_scale = serial_state.shader_params.noise_scale
@@ -146,14 +215,6 @@ load_state :: proc(state: ^AppState) -> (ok: bool) {
     state.title.digital_noise_params.pulse_speed = serial_state.shader_params.pulse_speed
     state.title.digital_noise_params.pulse_intensity = serial_state.shader_params.pulse_intensity
     state.title.digital_noise_params.glitch_color = serial_state.shader_params.glitch_color
-
-    // Load and apply window state
-    if serial_state.window.width > 0 && serial_state.window.height > 0 {
-        rl.SetWindowSize(serial_state.window.width, serial_state.window.height)
-        rl.SetWindowPosition(serial_state.window.pos_x, serial_state.window.pos_y)
-        state.window_width = serial_state.window.width
-        state.window_height = serial_state.window.height
-    }
 
     // Apply digital noise parameters to shader
     if state.title.shaders[0].shader.id != 0 {
@@ -169,45 +230,60 @@ load_state :: proc(state: ^AppState) -> (ok: bool) {
         rl.SetShaderValue(shader.shader, shader.glitch_color_loc, &state.title.digital_noise_params.glitch_color[0], .VEC3)
     }
 
+    // Make sure Input state has the proper reference to locations
+    state.input.locations = &state.locations
+
     fmt.println("* State loaded successfully")
     return true
 }
 
 // Save state to temporary file
 save_state_temp :: proc(state: ^AppState) -> bool {
-    context.allocator = context.temp_allocator
-    
-    // Parse input buffers to integers
-    x_str := strings.trim_right(string(state.input.input_buffers[0][:]), "\x00")
-    z_str := strings.trim_right(string(state.input.input_buffers[1][:]), "\x00")
-    
-    fmt.println("* Debug: Raw input buffers:")
-    fmt.println("  X buffer:", x_str, "length:", len(x_str))
-    fmt.println("  Z buffer:", z_str, "length:", len(z_str))
-    
-    // Get current window state
-    window_pos := rl.GetWindowPosition()
-    window_width := rl.GetScreenWidth()
-    window_height := rl.GetScreenHeight()
-    
-    // Handle empty inputs
-    if len(x_str) == 0 || len(z_str) == 0 {
-        // Use the converted coordinates if input is empty
-        x_val := state.coordinates.converted.x
-        z_val := state.coordinates.converted.z
-        fmt.println("* Debug: Using converted coordinates:", x_val, z_val)
+    // Use temp allocator for JSON serialization
+    {
+        context.allocator = context.temp_allocator
+        defer free_all(context.temp_allocator)
+        
+        // Parse input buffers to integers
+        x_str := strings.trim_right(string(state.input.coord_buffers[0][:]), "\x00")
+        z_str := strings.trim_right(string(state.input.coord_buffers[1][:]), "\x00")
+        
+        // Get current window state
+        window_pos := rl.GetWindowPosition()
+        window_width := rl.GetScreenWidth()
+        window_height := rl.GetScreenHeight()
         
         // Create serialized locations
         serialized_locations := make([]SerializedLocation, len(state.locations.locations))
-        defer delete(serialized_locations)
         
         for location, i in state.locations.locations {
             serialized_locations[i] = SerializedLocation{
-                name = location.name,
+                name = strings.clone(location.name, context.temp_allocator),
+                world = strings.clone(location.world, context.temp_allocator),
                 x = location.x,
                 z = location.z,
                 dimension = location.dimension,
+                description = strings.clone(location.description, context.temp_allocator),
             }
+        }
+        
+        // Parse coordinates, using converted coordinates as fallback
+        x_val, z_val: i32
+        if len(x_str) > 0 && len(z_str) > 0 {
+            x_val_int, x_ok := strconv.parse_int(x_str)
+            z_val_int, z_ok := strconv.parse_int(z_str)
+            
+            if !x_ok || !z_ok {
+                fmt.eprintln("Failed to parse input coordinates")
+                return false
+            }
+            
+            x_val = i32(x_val_int)
+            z_val = i32(z_val_int)
+        } else {
+            // Use converted coordinates if input is empty
+            x_val = i32(math.round_f32(f32(state.coordinates.converted.x)))
+            z_val = i32(math.round_f32(f32(state.coordinates.converted.z)))
         }
         
         // Create serialized state from app state
@@ -219,7 +295,6 @@ save_state_temp :: proc(state: ^AppState) -> bool {
             },
             locations = serialized_locations,
             shader_params = {
-                // Digital noise parameters
                 noise_scale = state.title.digital_noise_params.noise_scale,
                 glitch_intensity = state.title.digital_noise_params.glitch_intensity,
                 scan_line_density = state.title.digital_noise_params.scan_line_density,
@@ -233,127 +308,28 @@ save_state_temp :: proc(state: ^AppState) -> bool {
             window = {
                 width = window_width,
                 height = window_height,
-                pos_x = i32(window_pos.x),
-                pos_y = i32(window_pos.y),
+                pos_x = i32(math.round_f32(f32(window_pos.x))),
+                pos_y = i32(math.round_f32(f32(window_pos.y))),
             },
         }
-        
-        // Save digital noise parameters
-        serial_state.shader_params.noise_scale = state.title.digital_noise_params.noise_scale
-        serial_state.shader_params.glitch_intensity = state.title.digital_noise_params.glitch_intensity
-        serial_state.shader_params.scan_line_density = state.title.digital_noise_params.scan_line_density
-        serial_state.shader_params.tear_frequency = state.title.digital_noise_params.tear_frequency
-        serial_state.shader_params.rgb_split_amount = state.title.digital_noise_params.rgb_split_amount
-        serial_state.shader_params.static_amount = state.title.digital_noise_params.static_amount
-        serial_state.shader_params.pulse_speed = state.title.digital_noise_params.pulse_speed
-        serial_state.shader_params.pulse_intensity = state.title.digital_noise_params.pulse_intensity
-        serial_state.shader_params.glitch_color = state.title.digital_noise_params.glitch_color
-        
+
         // Convert to JSON
-        data, marshal_err := json.marshal(serial_state)
-        if marshal_err != nil {
-            fmt.eprintln("! Failed to marshal state to JSON:", marshal_err)
+        data, err := json.marshal(serial_state)
+        if err != nil {
+            fmt.eprintln("Failed to marshal state to JSON:", err)
             return false
         }
-        defer delete(data)
-        
-        // Print debug info
-        fmt.println("* Debug: JSON data:", string(data))
         
         // Write to temporary file first
-        if !os.write_entire_file("state.json.tmp", data) {
-            fmt.eprintln("! Failed to write temporary state file")
+        ok := os.write_entire_file("state.json.tmp", data)
+        if !ok {
+            fmt.eprintln("Failed to write temporary state file")
             return false
         }
         
-        fmt.println("* Temporary state file written successfully")
+        fmt.println("State saved to temporary file")
         return true
     }
-    
-    // Try to parse non-empty input buffers
-    x_val, x_ok := strconv.parse_int(x_str)
-    z_val, z_ok := strconv.parse_int(z_str)
-    
-    if !x_ok || !z_ok {
-        fmt.eprintln("! Failed to parse input coordinates")
-        fmt.eprintln("  X parse result:", x_ok)
-        fmt.eprintln("  Z parse result:", z_ok)
-        return false
-    }
-    
-    fmt.println("* Debug: Successfully parsed coordinates:", x_val, z_val)
-    
-    // Create serialized locations
-    serialized_locations := make([]SerializedLocation, len(state.locations.locations))
-    defer delete(serialized_locations)
-    
-    for location, i in state.locations.locations {
-        serialized_locations[i] = SerializedLocation{
-            name = location.name,
-            x = location.x,
-            z = location.z,
-            dimension = location.dimension,
-        }
-    }
-    
-    // Create serialized state from app state
-    serial_state := SerializedState{
-        coordinates = {
-            input_x = x_val,
-            input_z = z_val,
-            dimension = state.coordinates.source_dimension,
-        },
-        locations = serialized_locations,
-        shader_params = {
-            // Digital noise parameters
-            noise_scale = state.title.digital_noise_params.noise_scale,
-            glitch_intensity = state.title.digital_noise_params.glitch_intensity,
-            scan_line_density = state.title.digital_noise_params.scan_line_density,
-            tear_frequency = state.title.digital_noise_params.tear_frequency,
-            rgb_split_amount = state.title.digital_noise_params.rgb_split_amount,
-            static_amount = state.title.digital_noise_params.static_amount,
-            pulse_speed = state.title.digital_noise_params.pulse_speed,
-            pulse_intensity = state.title.digital_noise_params.pulse_intensity,
-            glitch_color = state.title.digital_noise_params.glitch_color,
-        },
-        window = {
-            width = window_width,
-            height = window_height,
-            pos_x = i32(window_pos.x),
-            pos_y = i32(window_pos.y),
-        },
-    }
-
-    // Save digital noise parameters
-    serial_state.shader_params.noise_scale = state.title.digital_noise_params.noise_scale
-    serial_state.shader_params.glitch_intensity = state.title.digital_noise_params.glitch_intensity
-    serial_state.shader_params.scan_line_density = state.title.digital_noise_params.scan_line_density
-    serial_state.shader_params.tear_frequency = state.title.digital_noise_params.tear_frequency
-    serial_state.shader_params.rgb_split_amount = state.title.digital_noise_params.rgb_split_amount
-    serial_state.shader_params.static_amount = state.title.digital_noise_params.static_amount
-    serial_state.shader_params.pulse_speed = state.title.digital_noise_params.pulse_speed
-    serial_state.shader_params.pulse_intensity = state.title.digital_noise_params.pulse_intensity
-    serial_state.shader_params.glitch_color = state.title.digital_noise_params.glitch_color
-
-    // Convert to JSON
-    data, marshal_err := json.marshal(serial_state)
-    if marshal_err != nil {
-        fmt.eprintln("! Failed to marshal state to JSON:", marshal_err)
-        return false
-    }
-    defer delete(data)
-
-    // Print debug info
-    fmt.println("* Debug: JSON data:", string(data))
-
-    // Write to temporary file first
-    if !os.write_entire_file("state.json.tmp", data) {
-        fmt.eprintln("! Failed to write temporary state file")
-        return false
-    }
-
-    fmt.println("* Temporary state file written successfully")
-    return true
 }
 
 // Save state to final file
