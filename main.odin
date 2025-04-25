@@ -364,6 +364,7 @@ init_app :: proc() -> AppState {
     }
     
     state.layout = DEFAULT_LAYOUT
+    customize_layout(&state.layout)  // Apply custom layout settings
     
     // Try to load previous state after all initialization is complete
     if load_state(&state) {
@@ -661,58 +662,63 @@ main :: proc() {
         }
         
         if rl.IsMouseButtonPressed(.LEFT) {
-            handled_click := false
-            
-            // Check if we're in the location dialog
-            if is_in_location_dialog(&state.input) {
-                // Skip normal click handling, as the dialog has its own click handler
-                handled_click = true
+            // Skip processing if mouse has already been handled by another system (like the dialog)
+            if state.input.mouse_handled {
+                // Mouse already handled (e.g. by location dialog), skip further processing
             } else {
-                // Check clicks against section elements
-                for i in 0..<5 {
-                    element := &converter_section.elements[UIElement_ID(i)]
-                    if element.is_visible && rl.CheckCollisionPointRec(mouse_pos, element.bounds) {
-                        switch i {
-                        case 0: // X input
-                            if state.input.active_input != .X {
-                                fmt.println("State change: Clicked X input")
-                                state.input.active_input = .X
-                                state.input.should_clear = true
-                            }
-                        case 1: // Z input
-                            if state.input.active_input != .Z {
-                                fmt.println("State change: Clicked Z input")
-                                state.input.active_input = .Z
-                                state.input.should_clear = true
-                            }
-                        case 2: // Overworld button
-                            if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Overworld {
-                                fmt.println("State change: Clicked Overworld button")
-                                handle_dimension_click(&state, .Overworld)
-                            }
-                        case 3: // Nether button
-                            if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Nether {
-                                fmt.println("State change: Clicked Nether button")
-                                handle_dimension_click(&state, .Nether)
-                            }
-                        }
-                        handled_click = true
-                        break
-                    }
-                }
+                handled_click := false
                 
-                if !handled_click && state.clipboard.hovered {
-                    // Use a reusable buffer instead of fmt.tprintf and strings.clone_to_cstring
-                    coord_buf: [64]u8
-                    coord_str := fmt.bprintf(coord_buf[:], "%d, %d", state.coordinates.converted.x, state.coordinates.converted.z)
-                    set_clipboard_text_efficient(coord_str)
-                    state.clipboard.last_copied = 0.5 // Start feedback animation
+                // Check if we're in the location dialog
+                if is_in_location_dialog(&state.input) {
+                    // Skip normal click handling, as the dialog has its own click handler
                     handled_click = true
-                } else if !handled_click && state.input.active_input != .None {
-                    // Only clear input state if we're not in a dialog
-                    if !is_in_location_dialog(&state.input) {
-                        fmt.println("State change: Clicked outside inputs")
-                        state.input.active_input = .None
+                } else {
+                    // Check clicks against section elements
+                    for i in 0..<5 {
+                        element := &converter_section.elements[UIElement_ID(i)]
+                        if element.is_visible && rl.CheckCollisionPointRec(mouse_pos, element.bounds) {
+                            switch i {
+                            case 0: // X input
+                                if state.input.active_input != .X {
+                                    fmt.println("State change: Clicked X input")
+                                    state.input.active_input = .X
+                                    state.input.should_clear = true
+                                }
+                            case 1: // Z input
+                                if state.input.active_input != .Z {
+                                    fmt.println("State change: Clicked Z input")
+                                    state.input.active_input = .Z
+                                    state.input.should_clear = true
+                                }
+                            case 2: // Overworld button
+                                if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Overworld {
+                                    fmt.println("State change: Clicked Overworld button")
+                                    handle_dimension_click(&state, .Overworld)
+                                }
+                            case 3: // Nether button
+                                if state.input.active_input != .Dimension || state.coordinates.source_dimension != Dimension.Nether {
+                                    fmt.println("State change: Clicked Nether button")
+                                    handle_dimension_click(&state, .Nether)
+                                }
+                            }
+                            handled_click = true
+                            break
+                        }
+                    }
+                    
+                    if !handled_click && state.clipboard.hovered {
+                        // Use a reusable buffer instead of fmt.tprintf and strings.clone_to_cstring
+                        coord_buf: [64]u8
+                        coord_str := fmt.bprintf(coord_buf[:], "%d, %d", state.coordinates.converted.x, state.coordinates.converted.z)
+                        set_clipboard_text_efficient(coord_str)
+                        state.clipboard.last_copied = 0.5 // Start feedback animation
+                        handled_click = true
+                    } else if !handled_click && state.input.active_input != .None {
+                        // Only clear input state if we're not in a dialog
+                        if !is_in_location_dialog(&state.input) {
+                            fmt.println("State change: Clicked outside inputs")
+                            state.input.active_input = .None
+                        }
                     }
                 }
             }
@@ -1135,7 +1141,8 @@ main :: proc() {
         draw_outlined_text(state.font, "X:", rl.Vector2{x_input.label_pos.x, x_input.label_pos.y}, state.font_size, 1)
         x_box_color := rl.ColorAlpha(state.input.active_input == .X ? rl.BLUE : rl.DARKGRAY, state.input.active_input == .X ? 0.7 : 0.5)
         rl.DrawRectangleRec(x_input.rect, x_box_color)
-        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.coord_buffers[0][:])), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, state.font_size, 1)
+        x_input_c_buf: [64]u8
+        draw_outlined_text(state.font, get_cstring(string(state.input.coord_buffers[0][:]), x_input_c_buf[:]), rl.Vector2{x_input.text_pos.x, x_input.text_pos.y}, state.font_size, 1)
         
         // Debug visualization for X input
         if state.debug_view {
@@ -1158,13 +1165,15 @@ main :: proc() {
             
             // Debug info
             debug_info := fmt.tprintf("active:%v buf:%s", state.input.active_input == .X, string(state.input.coord_buffers[0][:]))
-            rl.DrawText(strings.clone_to_cstring(debug_info), i32(x_input.rect.x), i32(x_input.rect.y - 12), 10, rl.ColorAlpha(rl.WHITE, 0.5))
+            debug_x_c_buf: [128]u8
+            rl.DrawText(get_cstring(debug_info, debug_x_c_buf[:]), i32(x_input.rect.x), i32(x_input.rect.y - 12), 10, rl.ColorAlpha(rl.WHITE, 0.5))
         }
         
         draw_outlined_text(state.font, "Z:", rl.Vector2{z_input.label_pos.x, z_input.label_pos.y}, state.font_size, 1)
         z_box_color := rl.ColorAlpha(state.input.active_input == .Z ? rl.BLUE : rl.DARKGRAY, state.input.active_input == .Z ? 0.7 : 0.5)
         rl.DrawRectangleRec(z_input.rect, z_box_color)
-        draw_outlined_text(state.font, strings.clone_to_cstring(string(state.input.coord_buffers[1][:])), rl.Vector2{z_input.text_pos.x, z_input.text_pos.y}, state.font_size, 1)
+        z_input_c_buf: [64]u8
+        draw_outlined_text(state.font, get_cstring(string(state.input.coord_buffers[1][:]), z_input_c_buf[:]), rl.Vector2{z_input.text_pos.x, z_input.text_pos.y}, state.font_size, 1)
         
         // Debug visualization for Z input (similar to X input)
         if state.debug_view {
@@ -1182,7 +1191,8 @@ main :: proc() {
             )
             
             debug_info := fmt.tprintf("active:%v buf:%s", state.input.active_input == .Z, string(state.input.coord_buffers[1][:]))
-            rl.DrawText(strings.clone_to_cstring(debug_info), i32(z_input.rect.x), i32(z_input.rect.y - 12), 10, rl.ColorAlpha(rl.WHITE, 0.5))
+            debug_z_c_buf: [128]u8
+            rl.DrawText(get_cstring(debug_info, debug_z_c_buf[:]), i32(z_input.rect.x), i32(z_input.rect.y - 12), 10, rl.ColorAlpha(rl.WHITE, 0.5))
         }
         
         draw_outlined_text(state.font, "STARTING DIMENSION:", rl.Vector2{20, overworld_button.rect.y - state.layout.spacing}, state.font_size, 1)
@@ -1231,8 +1241,9 @@ main :: proc() {
                 state.input.active_input == .Dimension,
                 state.coordinates.source_dimension == .Overworld,
             )
+            debug_overworld_c_buf: [128]u8
             rl.DrawText(
-                strings.clone_to_cstring(debug_info),
+                get_cstring(debug_info, debug_overworld_c_buf[:]),
                 i32(overworld_button.rect.x),
                 i32(overworld_button.rect.y - 12),
                 10,
@@ -1251,10 +1262,12 @@ main :: proc() {
         
         // Properly center the Nether text
         nether_text := "NETHER"
-        nether_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(nether_text), state.font_size, 1)
+        nether_text_c_buf: [32]u8
+        nether_text_size := rl.MeasureTextEx(state.font, get_cstring(nether_text, nether_text_c_buf[:]), state.font_size, 1)
+        nether_draw_buf: [32]u8
         draw_outlined_text(
             state.font, 
-            strings.clone_to_cstring(nether_text),
+            get_cstring(nether_text, nether_draw_buf[:]),
             rl.Vector2{
                 nether_button.rect.x + (nether_button.rect.width - nether_text_size.x)/2,
                 nether_button.rect.y + (nether_button.rect.height - nether_text_size.y)/2
@@ -1278,8 +1291,9 @@ main :: proc() {
                 state.input.active_input == .Dimension,
                 state.coordinates.source_dimension == .Nether,
             )
+            debug_nether_c_buf: [128]u8
             rl.DrawText(
-                strings.clone_to_cstring(debug_info),
+                get_cstring(debug_info, debug_nether_c_buf[:]),
                 i32(nether_button.rect.x),
                 i32(nether_button.rect.y - 12),
                 10,
@@ -1295,9 +1309,10 @@ main :: proc() {
         coord_text := fmt.bprintf(coord_buffer[:], "X: %d, Z: %d", 
             state.coordinates.converted.x, state.coordinates.converted.z)
         
+        coord_c_buf: [64]u8
         draw_outlined_text(
             state.font,
-            strings.clone_to_cstring(coord_text),
+            get_cstring(coord_text, coord_c_buf[:]),
             rl.Vector2{converted_coords.text_pos.x, converted_coords.text_pos.y},
             state.font_size * 1.2,
             1,
@@ -1306,9 +1321,10 @@ main :: proc() {
         if state.clipboard.last_copied > 0 {
             feedback_text := fmt.bprintf(feedback_buffer[:], "Copied!")
             feedback_pos := rl.Vector2{converted_coords.text_pos.x + 200, converted_coords.text_pos.y}
+            feedback_c_buf: [32]u8
             rl.DrawTextEx(
                 state.font,
-                strings.clone_to_cstring(feedback_text),
+                get_cstring(feedback_text, feedback_c_buf[:]),
                 feedback_pos,
                 state.font_size,
                 1,
@@ -1348,48 +1364,22 @@ main :: proc() {
             
             // Draw title
             title_text := "Shader Parameters"
+            title_text_c_buf: [32]u8
             title_pos_x := f32(state.window_width) - max_text_width - margin + panel_padding
-            rl.DrawText(strings.clone_to_cstring(title_text), i32(title_pos_x), i32(start_y), text_size, rl.ColorAlpha(rl.WHITE, 0.8))
+            rl.DrawText(get_cstring(title_text, title_text_c_buf[:]), i32(title_pos_x), i32(start_y), text_size, rl.ColorAlpha(rl.WHITE, 0.8))
             
             // Draw parameters
             for param, idx in params {
                 y_pos := start_y + f32(idx + 1) * line_height
                 text := fmt.tprintf("%s: %.3f", param.name, param.value)
                 text_pos_x := f32(state.window_width) - max_text_width - margin + panel_padding
+                param_c_buf: [64]u8
                 rl.DrawText(
-                    strings.clone_to_cstring(text),
+                    get_cstring(text, param_c_buf[:]),
                     i32(text_pos_x),
                     i32(y_pos),
                     text_size,
                     rl.ColorAlpha(rl.WHITE, 0.8),
-                )
-                
-                // Draw key hints
-                key_hint := ""
-                if param.name == "Noise Scale" {
-                    key_hint = "Ctrl + Q/A"
-                } else if param.name == "Glitch Intensity" {
-                    key_hint = "Ctrl + W/S"
-                } else if param.name == "Scan Line Density" {
-                    key_hint = "Ctrl + E/D"
-                } else if param.name == "Tear Frequency" {
-                    key_hint = "Ctrl + R/F"
-                } else if param.name == "RGB Split Amount" {
-                    key_hint = "Ctrl + T/G"
-                } else if param.name == "Static Amount" {
-                    key_hint = "Ctrl + Y/H"
-                } else if param.name == "Pulse Speed" {
-                    key_hint = "Ctrl + U/J"
-                } else if param.name == "Pulse Intensity" {
-                    key_hint = "Ctrl + I/K"
-                }
-                hint_pos_x := f32(state.window_width) - f32(rl.MeasureText(strings.clone_to_cstring(key_hint), text_size)) - margin
-                rl.DrawText(
-                    strings.clone_to_cstring(key_hint),
-                    i32(hint_pos_x),
-                    i32(y_pos),
-                    text_size,
-                    rl.ColorAlpha(rl.GRAY, 0.6),
                 )
             }
         }
@@ -1497,13 +1487,33 @@ main :: proc() {
             search_box_rect,
             rl.ColorAlpha(state.input.active_input == .LocationSearch ? rl.BLUE : rl.DARKGRAY, 0.5),
         )
-        draw_outlined_text(
-            state.font,
-            strings.clone_to_cstring(string(state.input.coord_buffers[2][:])),
-            rl.Vector2{search_box_rect.x + 5, search_box_rect.y + 5},
-            state.font_size,
-            1,
-        )
+
+        // Get current search text
+        search_text := string_from_bytes(state.input.search_buffer[:])
+
+        if len(search_text) > 0 {
+            // Show actual search text
+            search_c_buf: [256]u8  // Add buffer for cstring
+            draw_outlined_text(
+                state.font,
+                get_cstring(search_text, search_c_buf[:]),
+                rl.Vector2{search_box_rect.x + 5, search_box_rect.y + 5},
+                state.font_size,
+                1,
+            )
+        } else if state.input.active_input != .LocationSearch {
+            // Show placeholder text when not active and empty
+            placeholder := "Search locations..."
+            placeholder_c_buf: [256]u8  // Add buffer for cstring
+            draw_outlined_text(
+                state.font,
+                get_cstring(placeholder, placeholder_c_buf[:]),
+                rl.Vector2{search_box_rect.x + 5, search_box_rect.y + 5},
+                state.font_size,
+                1,
+                rl.ColorAlpha(rl.GRAY, 0.7),  // Dimmer color for placeholder
+            )
+        }
 
         // Draw add button
         add_button_rect := rl.Rectangle{
@@ -1535,53 +1545,145 @@ main :: proc() {
             },
         }
         rl.DrawRectangleRec(locations_list.rect, rl.ColorAlpha(rl.DARKGRAY, 0.3))
+        
+        // Handle mouse wheel scrolling for locations list when hovering over it
+        if rl.CheckCollisionPointRec(mouse_pos, locations_list.rect) && !is_in_location_dialog(&state.input) && !state.input.mouse_handled {
+            wheel_move := rl.GetMouseWheelMove()
+            if wheel_move != 0 {
+                // Calculate max scroll based on number of items and list height
+                item_height := f32(60)  // Height of each location item
+                
+                // Determine the total content height
+                visible_locations_count: int
+                if len(state.locations.filtered_locations) > 0 {
+                    visible_locations_count = len(state.locations.filtered_locations)
+                } else {
+                    visible_locations_count = len(state.locations.locations)
+                }
+                
+                total_content_height := f32(visible_locations_count) * item_height
+                max_scroll := max(0, total_content_height - list_height)
+                
+                // Update scroll position with constraints
+                state.locations.scroll_offset = clamp(
+                    state.locations.scroll_offset - wheel_move * state.layout.scroll_speed,
+                    0,
+                    max_scroll
+                )
+            }
+        }
 
-        // Draw locations
-        item_height := f32(60)  // Reduced height since we removed tags
+        // Draw locations with scrolling support
+        item_height := f32(60)  // Height of each location item
         content_x := locations_list.rect.x + 10
         content_width := locations_list.rect.width - 20
+        total_visible_count := 0
 
-        for location, i in state.locations.locations {
-            if state.locations.current_filter != "" && 
-               !strings.contains_any(strings.to_lower(location.name), strings.to_lower(state.locations.current_filter)) {
+        // Determine which locations to display
+        display_indices: []int
+        if len(state.locations.filtered_locations) > 0 {
+            display_indices = state.locations.filtered_locations[:]
+        } else {
+            // Create a temporary slice with indices 0 to len(locations)-1
+            temp_indices := make([]int, len(state.locations.locations), context.temp_allocator)
+            for i := 0; i < len(state.locations.locations); i += 1 {
+                temp_indices[i] = i
+            }
+            display_indices = temp_indices
+        }
+        
+        // Calculate the range of indices to display based on scrolling
+        for display_idx := 0; display_idx < len(display_indices); display_idx += 1 {
+            i := display_indices[display_idx]  // Get the actual location index
+            
+            // Calculate item position with scrolling
+            item_y := list_start_y + f32(total_visible_count) * item_height - state.locations.scroll_offset
+            total_visible_count += 1
+            
+            // Skip if outside visible area (simple culling)
+            if item_y + item_height < list_start_y || item_y > list_start_y + list_height {
                 continue
             }
-
-            item_y := list_start_y + f32(i) * item_height
+            
+            // Get the location
+            location := state.locations.locations[i]
+            
+            // Create the item rectangle
             item_rect := rl.Rectangle{content_x, item_y, content_width, item_height}
-
+            
+            // Draw clip rectangle to prevent drawing outside the list area
+            rl.BeginScissorMode(i32(locations_list.rect.x), i32(list_start_y), 
+                              i32(locations_list.rect.width), i32(list_height))
+            
             // Draw selection highlight
             if i == state.locations.selected_index {
                 rl.DrawRectangleRec(item_rect, rl.ColorAlpha(rl.BLUE, 0.3))
             }
-
+            
             // Draw location name
             name_c_buf: [256]u8
             name_pos := rl.Vector2{content_x + 5, item_y + 5}
-            draw_outlined_text(state.font, get_cstring(location.name, name_c_buf[:]), name_pos, state.font_size, 1)
-
+            
+            // Use a different color for the name based on if it matches the search
+            name_color := rl.WHITE
+            search_text := string_from_bytes(state.input.search_buffer[:])
+            if len(search_text) > 0 && len(state.locations.filtered_locations) > 0 {
+                // If we have search text and filtered locations, highlight matching parts
+                filter_lower := strings.to_lower(search_text)
+                name_lower := strings.to_lower(location.name)
+                
+                if strings.contains(name_lower, filter_lower) {
+                    // Highlight if the name matches
+                    name_color = rl.ColorAlpha(rl.GREEN, 0.9) 
+                }
+            }
+            draw_outlined_text(state.font, get_cstring(location.name, name_c_buf[:]), name_pos, state.font_size, 1, name_color)
+            
             // Draw coordinates and world
             coords_buf: [128]u8
             coords := fmt.bprintf(coords_buf[:], "%d, %d (%v) - %s", location.x, location.z, location.dimension, location.world)
             coords_pos := rl.Vector2{content_x + 5, item_y + 25}
             
-            // Use memory-efficient text drawing
+            // Use memory-efficient text drawing with highlighting if matching search
+            coords_color := rl.WHITE
+            if len(search_text) > 0 && len(state.locations.filtered_locations) > 0 {
+                coords_str := fmt.tprintf("%d %d", location.x, location.z)
+                world_lower := strings.to_lower(location.world)
+                filter_lower := strings.to_lower(search_text)
+                
+                if strings.contains(strings.to_lower(coords_str), filter_lower) || 
+                   strings.contains(world_lower, filter_lower) {
+                    coords_color = rl.ColorAlpha(rl.GREEN, 0.9)
+                }
+            }
             coords_c_buf: [128]u8
-            draw_outlined_text(state.font, get_cstring(coords, coords_c_buf[:]), coords_pos, state.font_size * 0.8, 1)
-
+            draw_outlined_text(state.font, get_cstring(coords, coords_c_buf[:]), coords_pos, state.font_size * 0.8, 1, coords_color)
+            
             // Draw description (if any)
             if len(location.description) > 0 {
                 desc_c_buf: [512]u8
                 desc_pos := rl.Vector2{content_x + 5, item_y + 45}
+                
+                // Use highlighting for description if it's what matched the search
+                desc_color := rl.WHITE
+                if len(search_text) > 0 && len(state.locations.filtered_locations) > 0 {
+                    desc_lower := strings.to_lower(location.description)
+                    filter_lower := strings.to_lower(search_text)
+                    
+                    if strings.contains(desc_lower, filter_lower) {
+                        desc_color = rl.ColorAlpha(rl.GREEN, 0.9)
+                    }
+                }
                 draw_outlined_text(
                     state.font,
                     get_cstring(location.description, desc_c_buf[:]),
                     desc_pos,
                     state.font_size * 0.8,
                     1,
+                    desc_color,
                 )
             }
-
+            
             // Draw separator line
             line_y := item_y + item_height - 1
             rl.DrawLineEx(
@@ -1590,53 +1692,108 @@ main :: proc() {
                 1,
                 rl.ColorAlpha(rl.WHITE, 0.3),
             )
+            
+            rl.EndScissorMode()
+        }
+
+        // Draw scrollbar if we have more content than can fit in the view
+        total_locations: int 
+        if len(state.locations.current_filter) > 0 {
+            total_locations = len(state.locations.filtered_locations)
+        } else {
+            total_locations = len(state.locations.locations)
+        }
+
+        if f32(total_locations) * item_height > list_height {
+            // Calculate scrollbar dimensions
+            scrollbar_width := f32(8)
+            scrollbar_height := max(20.0, (list_height / (f32(total_locations) * item_height)) * list_height)
+            
+            scrollbar_x := locations_list.rect.x + locations_list.rect.width - scrollbar_width - 5
+            max_scroll := f32(total_locations) * item_height - list_height
+            
+            // Don't divide by zero
+            scroll_percent: f32
+            if max_scroll > 0 {
+                scroll_percent = state.locations.scroll_offset / max_scroll
+            } else {
+                scroll_percent = 0
+            }
+            
+            scrollbar_y := list_start_y + scroll_percent * (list_height - scrollbar_height)
+            
+            // Draw scrollbar background
+            rl.DrawRectangleRec(
+                rl.Rectangle{scrollbar_x, list_start_y, scrollbar_width, list_height},
+                rl.ColorAlpha(rl.DARKGRAY, 0.3)
+            )
+            
+            // Draw scrollbar handle
+            rl.DrawRectangleRec(
+                rl.Rectangle{scrollbar_x, scrollbar_y, scrollbar_width, scrollbar_height},
+                rl.ColorAlpha(rl.GRAY, 0.7)
+            )
         }
 
         // Handle location list interactions
         if rl.IsMouseButtonPressed(.LEFT) {
-            // Check for add button click
-            if rl.CheckCollisionPointRec(mouse_pos, add_button_rect) {
-                // Clear location input buffers
-                for i in 0..<len(state.input.location_dialog_buffers.name) do state.input.location_dialog_buffers.name[i] = 0
-                for i in 0..<len(state.input.location_dialog_buffers.world) do state.input.location_dialog_buffers.world[i] = 0
-                for i in 0..<len(state.input.location_dialog_buffers.description) do state.input.location_dialog_buffers.description[i] = 0
-                // Clear and pre-fill coordinate buffers
-                for i in 0..<len(state.input.location_dialog_buffers.x) do state.input.location_dialog_buffers.x[i] = 0
-                for i in 0..<len(state.input.location_dialog_buffers.z) do state.input.location_dialog_buffers.z[i] = 0
+            // Skip all these interactions if the location dialog is open
+            if !is_in_location_dialog(&state.input) && !state.input.mouse_handled {
+                // Check for add button click
+                if rl.CheckCollisionPointRec(mouse_pos, add_button_rect) {
+                    // Clear location input buffers
+                    for i in 0..<len(state.input.location_dialog_buffers.name) do state.input.location_dialog_buffers.name[i] = 0
+                    for i in 0..<len(state.input.location_dialog_buffers.world) do state.input.location_dialog_buffers.world[i] = 0
+                    for i in 0..<len(state.input.location_dialog_buffers.description) do state.input.location_dialog_buffers.description[i] = 0
+                    // Clear and pre-fill coordinate buffers
+                    for i in 0..<len(state.input.location_dialog_buffers.x) do state.input.location_dialog_buffers.x[i] = 0
+                    for i in 0..<len(state.input.location_dialog_buffers.z) do state.input.location_dialog_buffers.z[i] = 0
 
-                x_str := fmt.bprintf(state.input.location_dialog_buffers.x[:], "%d", state.coordinates.source.x)
-                z_str := fmt.bprintf(state.input.location_dialog_buffers.z[:], "%d", state.coordinates.source.z)
-                // Ensure null termination (bprintf should handle this, but good practice)
-                state.input.location_dialog_buffers.x[len(x_str)] = 0 
-                state.input.location_dialog_buffers.z[len(z_str)] = 0
-                
-                // Pre-fill with default name
-                name_buf: [64]u8
-                name_str := fmt.bprintf(name_buf[:], "Location %d", len(state.locations.locations) + 1)
-                for i := 0; i < min(len(name_str), len(state.input.location_dialog_buffers.name)-1); i += 1 {
-                    state.input.location_dialog_buffers.name[i] = name_str[i]
+                    x_str := fmt.bprintf(state.input.location_dialog_buffers.x[:], "%d", state.coordinates.source.x)
+                    z_str := fmt.bprintf(state.input.location_dialog_buffers.z[:], "%d", state.coordinates.source.z)
+                    // Ensure null termination (bprintf should handle this, but good practice)
+                    state.input.location_dialog_buffers.x[len(x_str)] = 0 
+                    state.input.location_dialog_buffers.z[len(z_str)] = 0
+                    
+                    // Pre-fill with default name
+                    name_buf: [64]u8
+                    name_str := fmt.bprintf(name_buf[:], "Location %d", len(state.locations.locations) + 1)
+                    for i := 0; i < min(len(name_str), len(state.input.location_dialog_buffers.name)-1); i += 1 {
+                        state.input.location_dialog_buffers.name[i] = name_str[i]
+                    }
+                    state.input.location_dialog_buffers.name[min(len(name_str), len(state.input.location_dialog_buffers.name)-1)] = 0
+                    
+                    // Initialize the dimension to match current source dimension
+                    state.input.location_dialog_dimension = state.coordinates.source_dimension
+                    
+                    state.input.active_input = .LocationName
+                    state.input.should_clear = true
                 }
-                state.input.location_dialog_buffers.name[min(len(name_str), len(state.input.location_dialog_buffers.name)-1)] = 0
                 
-                // Initialize the dimension to match current source dimension
-                state.input.location_dialog_dimension = state.coordinates.source_dimension
+                // Check for search box click
+                if rl.CheckCollisionPointRec(mouse_pos, search_box_rect) {
+                    state.input.active_input = .LocationSearch
+                    state.input.should_clear = true
+                }
                 
-                state.input.active_input = .LocationName
-                state.input.should_clear = true
-            }
-            
-            // Check for search box click
-            if rl.CheckCollisionPointRec(mouse_pos, search_box_rect) {
-                state.input.active_input = .LocationSearch
-                state.input.should_clear = true
-            }
-            
-            // Check for location item click
-            if rl.CheckCollisionPointRec(mouse_pos, locations_list.rect) {
-                mouse_y := mouse_pos.y - list_start_y
-                clicked_index := int(mouse_y / item_height)
-                if clicked_index >= 0 && clicked_index < len(state.locations.locations) {
-                    state.locations.selected_index = clicked_index
+                // Check for location item click - updated for scrolling
+                if rl.CheckCollisionPointRec(mouse_pos, locations_list.rect) {
+                    mouse_y := mouse_pos.y - list_start_y + state.locations.scroll_offset
+                    clicked_visual_index := int(mouse_y / item_height)
+                    
+                    // Map visible index to actual location index
+                    if len(state.locations.current_filter) > 0 {
+                        // When filtered, we need to convert the visual index to the actual location index
+                        if clicked_visual_index >= 0 && clicked_visual_index < len(state.locations.filtered_locations) {
+                            // The filtered_locations array contains actual indices
+                            state.locations.selected_index = state.locations.filtered_locations[clicked_visual_index]
+                        }
+                    } else {
+                        // When not filtered, the visual index is the same as the location index
+                        if clicked_visual_index >= 0 && clicked_visual_index < len(state.locations.locations) {
+                            state.locations.selected_index = clicked_visual_index
+                        }
+                    }
                 }
             }
         }
@@ -1755,8 +1912,8 @@ main :: proc() {
             // Text input is now handled in the input state update
             // Just draw the dialog and handle mouse/key navigation
             
-            dialog_width := f32(400)
-            dialog_height := f32(400)  // Increased height to accommodate dimension fields
+            dialog_width := f32(400) // Keep same width
+            dialog_height := f32(520) // Increased height to accommodate better spacing
             dialog_x := f32(state.window_width)/2 - dialog_width/2
             dialog_y := f32(state.window_height)/2 - dialog_height/2
             
@@ -1774,27 +1931,28 @@ main :: proc() {
             draw_outlined_text(
                 state.font,
                 strings.clone_to_cstring(title),
-                rl.Vector2{dialog_x + dialog_width/2 - title_size.x/2, dialog_y + 20},
+                rl.Vector2{dialog_x + dialog_width/2 - title_size.x/2, dialog_y + 25}, // Increased vertical position
                 state.font_size * 1.2,
                 1,
             )
             
-            // Draw input fields
-            input_x := dialog_x + 20
-            input_y := dialog_y + 60
-            input_width := dialog_width - 40
-            input_height := f32(30)
-            label_offset := f32(25)  // Space between label and input box
-            field_spacing := f32(60)  // Space between fields
+            // Draw input fields with improved spacing
+            input_x := dialog_x + 30 // Increased horizontal margin
+            input_y := dialog_y + 70 // Increased initial vertical position
+            input_width := dialog_width - 60 // Adjusted width for increased margins
+            input_height := f32(35) // Taller input fields
+            label_offset := f32(30)  // Increased space between label and input box
+            field_spacing := f32(70)  // Increased space between fields
             
             // Name field
             draw_outlined_text(state.font, "NAME:", rl.Vector2{input_x, input_y}, state.font_size, 1)
             name_box := rl.Rectangle{input_x, input_y + label_offset, input_width, input_height}
             rl.DrawRectangleRec(name_box, rl.ColorAlpha(state.input.active_input == .LocationName ? rl.BLUE : rl.DARKGRAY, 0.5))
+            name_c_buf: [256]u8
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(string(state.input.location_dialog_buffers.name[:])),
-                rl.Vector2{input_x + 5, input_y + label_offset + 5},
+                get_cstring(string(state.input.location_dialog_buffers.name[:]), name_c_buf[:]),
+                rl.Vector2{input_x + 10, input_y + label_offset + 7}, // Better text positioning within box
                 state.font_size,
                 1,
             )
@@ -1804,10 +1962,11 @@ main :: proc() {
             draw_outlined_text(state.font, "WORLD:", rl.Vector2{input_x, world_y}, state.font_size, 1)
             world_box := rl.Rectangle{input_x, world_y + label_offset, input_width, input_height}
             rl.DrawRectangleRec(world_box, rl.ColorAlpha(state.input.active_input == .LocationWorld ? rl.BLUE : rl.DARKGRAY, 0.5))
+            world_c_buf: [256]u8
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(string(state.input.location_dialog_buffers.world[:])),
-                rl.Vector2{input_x + 5, world_y + label_offset + 5},
+                get_cstring(string(state.input.location_dialog_buffers.world[:]), world_c_buf[:]),
+                rl.Vector2{input_x + 10, world_y + label_offset + 7},
                 state.font_size,
                 1,
             )
@@ -1817,10 +1976,11 @@ main :: proc() {
             draw_outlined_text(state.font, "DESCRIPTION:", rl.Vector2{input_x, desc_y}, state.font_size, 1)
             desc_box := rl.Rectangle{input_x, desc_y + label_offset, input_width, input_height}
             rl.DrawRectangleRec(desc_box, rl.ColorAlpha(state.input.active_input == .LocationDescription ? rl.BLUE : rl.DARKGRAY, 0.5))
+            desc_c_buf: [512]u8
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(string(state.input.location_dialog_buffers.description[:])),
-                rl.Vector2{input_x + 5, desc_y + label_offset + 5},
+                get_cstring(string(state.input.location_dialog_buffers.description[:]), desc_c_buf[:]),
+                rl.Vector2{input_x + 10, desc_y + label_offset + 7},
                 state.font_size,
                 1,
             )
@@ -1833,10 +1993,11 @@ main :: proc() {
             draw_outlined_text(state.font, "X:", rl.Vector2{input_x, coord_y}, state.font_size, 1)
             x_coord_box := rl.Rectangle{input_x, coord_y + label_offset, coord_width, input_height}
             rl.DrawRectangleRec(x_coord_box, rl.ColorAlpha(state.input.active_input == .LocationX ? rl.BLUE : rl.DARKGRAY, 0.5))
+            x_c_buf: [64]u8
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(string(state.input.location_dialog_buffers.x[:])),
-                rl.Vector2{input_x + 5, coord_y + label_offset + 5},
+                get_cstring(string(state.input.location_dialog_buffers.x[:]), x_c_buf[:]),
+                rl.Vector2{input_x + 10, coord_y + label_offset + 7},
                 state.font_size,
                 1,
             )
@@ -1846,10 +2007,11 @@ main :: proc() {
             draw_outlined_text(state.font, "Z:", rl.Vector2{z_input_x, coord_y}, state.font_size, 1)
             z_coord_box := rl.Rectangle{z_input_x, coord_y + label_offset, coord_width, input_height}
             rl.DrawRectangleRec(z_coord_box, rl.ColorAlpha(state.input.active_input == .LocationZ ? rl.BLUE : rl.DARKGRAY, 0.5))
+            z_c_buf: [64]u8
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(string(state.input.location_dialog_buffers.z[:])),
-                rl.Vector2{z_input_x + 5, coord_y + label_offset + 5},
+                get_cstring(string(state.input.location_dialog_buffers.z[:]), z_c_buf[:]),
+                rl.Vector2{z_input_x + 10, coord_y + label_offset + 7},
                 state.font_size,
                 1,
             )
@@ -1861,9 +2023,10 @@ main :: proc() {
             // Dimension toggle buttons
             dim_button_width := coord_width
             dim_button_spacing := state.layout.spacing
+            dim_button_height := input_height + 5 // Make dimension buttons slightly taller
             
             // Overworld button
-            overworld_dim_box := rl.Rectangle{input_x, dim_y + label_offset, dim_button_width, input_height}
+            overworld_dim_box := rl.Rectangle{input_x, dim_y + label_offset, dim_button_width, dim_button_height}
             overworld_dim_color := rl.ColorAlpha(
                 state.input.location_dialog_dimension == .Overworld ? rl.SKYBLUE : rl.DARKGRAY,
                 0.5
@@ -1872,20 +2035,22 @@ main :: proc() {
             
             // Center the text properly
             overworld_text := "OVERWORLD"
-            overworld_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(overworld_text), state.font_size, 1)
+            overworld_text_c_buf: [32]u8
+            overworld_text_size := rl.MeasureTextEx(state.font, get_cstring(overworld_text, overworld_text_c_buf[:]), state.font_size, 1)
+            overworld_draw_buf: [32]u8
             draw_outlined_text(
-                state.font,
-                strings.clone_to_cstring(overworld_text),
+                state.font, 
+                get_cstring(overworld_text, overworld_draw_buf[:]),
                 rl.Vector2{
-                    input_x + (dim_button_width - overworld_text_size.x)/2,
-                    dim_y + label_offset + (input_height - overworld_text_size.y)/2
-                },
-                state.font_size,
-                1,
+                    overworld_button.rect.x + (overworld_button.rect.width - overworld_text_size.x)/2,
+                    overworld_button.rect.y + (overworld_button.rect.height - overworld_text_size.y)/2
+                }, 
+                state.font_size, 
+                1
             )
             
             // Nether button
-            nether_dim_box := rl.Rectangle{z_input_x, dim_y + label_offset, dim_button_width, input_height}
+            nether_dim_box := rl.Rectangle{z_input_x, dim_y + label_offset, dim_button_width, dim_button_height}
             nether_dim_color := rl.ColorAlpha(
                 state.input.location_dialog_dimension == .Nether ? rl.SKYBLUE : rl.DARKGRAY,
                 0.5
@@ -1894,22 +2059,24 @@ main :: proc() {
             
             // Center the text properly
             nether_text := "NETHER"
-            nether_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(nether_text), state.font_size, 1)
+            nether_text_c_buf: [32]u8
+            nether_text_size := rl.MeasureTextEx(state.font, get_cstring(nether_text, nether_text_c_buf[:]), state.font_size, 1)
+            nether_draw_buf: [32]u8
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(nether_text),
+                get_cstring(nether_text, nether_draw_buf[:]),
                 rl.Vector2{
                     z_input_x + (dim_button_width - nether_text_size.x)/2,
-                    dim_y + label_offset + (input_height - nether_text_size.y)/2
+                    dim_y + label_offset + (dim_button_height - nether_text_size.y)/2
                 },
                 state.font_size,
                 1,
             )
             
-            // Add action buttons (Save/Cancel) at the bottom
-            button_y := dim_y + field_spacing
-            button_width := (input_width - state.layout.spacing) / 2 // Place Save and Cancel side-by-side
-            button_height := f32(40)
+            // Add action buttons (Save/Cancel) at the bottom - positioned more towards the bottom of dialog
+            button_y := dim_y + field_spacing + 10 // Added extra space before buttons
+            button_width := (input_width - state.layout.spacing) / 2
+            button_height := f32(45) // Taller buttons
             
             // Cancel button (left)
             cancel_button := rl.Rectangle{input_x, button_y + label_offset, button_width, button_height}
@@ -1994,8 +2161,16 @@ main :: proc() {
                     } else if rl.CheckCollisionPointRec(mouse_pos, save_button) {
                         // Save button - same functionality as pressing Enter in Z field
                         save_location_from_dialog(&state)
+                    } else {
+                        // Click was inside dialog but not on any interactive element
+                        // Just ensure we stay in the dialog and don't interact with elements underneath
+                        // We don't need to do anything specific - all clicks inside dialog should be consumed
                     }
-                    // Clicks inside dialog are always handled and should not close it
+                    
+                    // Mark all clicks within dialog as handled so they don't affect the rest of the UI
+                    state.input.mouse_handled = true
+                    
+                    // All clicks inside dialog are captured and shouldn't affect elements underneath
                 } else {
                     // If clicking outside the dialog, close it
                     state.input.active_input = .None
@@ -2126,4 +2301,18 @@ memory_usage_detailed :: proc() -> (count: int, current: int, peak: int) {
     return int(tracker.total_allocation_count), 
            int(tracker.current_memory_allocated), 
            int(tracker.peak_memory_allocated)
+}
+
+// Customize layout settings - this overrides settings from layout.odin's DEFAULT_LAYOUT
+customize_layout :: proc(layout: ^Layout) {
+    layout.margin = 25         // Increased from 20
+    layout.spacing = 40        // Increased from 35
+    layout.section_spacing = 55 // Increased from 45
+    layout.input_box.width = 200
+    layout.input_box.height = 32
+    layout.input_box.text_padding = 10
+    layout.dimension_button.width = 160
+    layout.dimension_button.height = 40 
+    layout.dimension_button.text_padding = 10
+    layout.dimension_button.gap = 15  // Increased from 10
 }

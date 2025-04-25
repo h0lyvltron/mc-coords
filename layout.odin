@@ -56,9 +56,9 @@ DEFAULT_LAYOUT := Layout {
     scroll_speed = 10.0,
     is_scrolling = false,
     last_mouse_y = 0,
-    margin = 20,
-    spacing = 35,
-    section_spacing = 45,
+    margin = 25,
+    spacing = 40,
+    section_spacing = 55,
     input_box = {
         width = 200,
         height = 32,
@@ -68,7 +68,7 @@ DEFAULT_LAYOUT := Layout {
         width = 160,
         height = 40,
         text_padding = 10,
-        gap = 10,
+        gap = 15,
     },
 }
 
@@ -328,7 +328,9 @@ make_dimension_buttons :: proc(layout: ^Layout, section: ^LayoutSection, pos: Po
     return
 }
 
-draw_outlined_text :: proc(font: rl.Font, text: cstring, position: rl.Vector2, font_size: f32, spacing: f32, thickness: f32 = 1) {
+draw_outlined_text :: proc(font: rl.Font, text: cstring, position: rl.Vector2, font_size: f32, spacing: f32, text_color: rl.Color = rl.WHITE, thickness: f32 = 1) {
+    // Draw white outline
+    outline_color := rl.WHITE
     offsets := [][2]f32{
         {-thickness, -thickness},
         {-thickness, 0},
@@ -342,8 +344,10 @@ draw_outlined_text :: proc(font: rl.Font, text: cstring, position: rl.Vector2, f
     
     for offset in offsets {
         pos := rl.Vector2{position.x + offset[0], position.y + offset[1]}
-        rl.DrawTextEx(font, text, pos, font_size, spacing, rl.WHITE)
+        rl.DrawTextEx(font, text, pos, font_size, spacing, outline_color)
     }
     
-    rl.DrawTextEx(font, text, position, font_size, spacing, rl.BLACK)
+    // Draw the text with the specified color (black if white was passed to maintain original behavior)
+    inner_color := text_color == rl.WHITE ? rl.BLACK : text_color
+    rl.DrawTextEx(font, text, position, font_size, spacing, inner_color)
 } 

@@ -125,6 +125,7 @@ InputState :: struct {
     key_states: map[rl.KeyboardKey]KeyState, // Use KeyState for handling repeats
     should_clear: bool,
     mouse: rl.Vector2,
+    mouse_handled: bool,  // Flag to track if a mouse click has been handled
     key_bindings: [dynamic]KeyBinding,
     needs_dimension_toggle: bool,
     last_backspace: f64,
@@ -158,6 +159,7 @@ init_input_state :: proc(state: ^InputState, locations: ^LocationDatabase) {
     state.needs_dimension_toggle = false
     state.text_input_active = false
     state.tab_pressed = false
+    state.mouse_handled = false
     state.locations = locations
     state.rename_location_index = -1 // Initialize rename index
     state.location_dialog_dimension = .Overworld // Default dimension for new locations
@@ -378,6 +380,9 @@ handle_text_input :: proc(state: ^InputState) -> bool {
 update_input_state :: proc(state: ^InputState) -> bool {
     current_time := f32(rl.GetTime())
     
+    // Reset mouse handling flag at the beginning of each frame
+    state.mouse_handled = false
+    
     // Direct escape key handling
     if rl.IsKeyPressed(.ESCAPE) {
         fmt.println("* Debug: Input state - escape key pressed")
@@ -394,6 +399,16 @@ update_input_state :: proc(state: ^InputState) -> bool {
         }
         
         if state.active_input != .None {
+            // If we're in search box, clear it
+            if state.active_input == .LocationSearch {
+                // Reset search buffer
+                for i in 0..<len(state.search_buffer) do state.search_buffer[i] = 0
+                
+                // Clear filter by passing empty string
+                fmt.println("* DEBUG: Clearing search filter via escape key")
+                apply_search_filter(state.locations, "")
+            }
+            
             fmt.println("  - In input field, clearing input state")
             state.active_input = .None
             return true
@@ -416,6 +431,8 @@ update_input_state :: proc(state: ^InputState) -> bool {
     if state.text_input_active {
         if state.active_input == .LocationSearch {
             // Handle search input
+            prev_search := string_from_bytes(state.search_buffer[:])
+            
             char := rl.GetCharPressed()
             for char != 0 {
                 if char >= 32 && char <= 126 {  // Printable characters
@@ -433,7 +450,13 @@ update_input_state :: proc(state: ^InputState) -> bool {
                     if i < len(state.search_buffer) - 1 {
                         state.search_buffer[i] = u8(char)
                         state.search_buffer[i + 1] = 0
-                        state.locations.current_filter = string(state.search_buffer[:i+1])
+                        
+                        // Create a safe, temporary string for filtering
+                        search_text := string(state.search_buffer[:i+1])
+                        fmt.printf("* DEBUG Search text: '%s'\n", search_text)
+                        
+                        // Apply the simple filter directly
+                        apply_search_filter(state.locations, search_text)
                     }
                 }
                 char = rl.GetCharPressed()
@@ -447,10 +470,18 @@ update_input_state :: proc(state: ^InputState) -> bool {
                 }
                 if i > 0 {
                     state.search_buffer[i-1] = 0
-                    state.locations.current_filter = string(state.search_buffer[:i-1])
+                    // Create a safe, temporary string for filtering
+                    search_text := string(state.search_buffer[:i-1])
+                    fmt.printf("* DEBUG Backspace: search now '%s'\n", search_text)
+                    
+                    // Apply the simple filter directly
+                    apply_search_filter(state.locations, search_text)
+                    
+                    // Update backspace timer
                     state.last_backspace = rl.GetTime()
                 }
             }
+            
             return true
         } else {
             handle_text_input(state)
@@ -703,4 +734,51 @@ ShaderParameter :: enum {
     StaticAmount,
     PulseSpeed,
     PulseIntensity,
+}
+
+// Apply a simple filter to locations
+apply_search_filter :: proc(db: ^LocationDatabase, search_text: string) {
+    fmt.printf("* SEARCH: Applying filter '%s'\n", search_text)
+    
+    // Clear the filtered locations array
+    clear(&db.filtered_locations)
+    
+    // If the search is empty, don't filter
+    if len(search_text) == 0 {
+        fmt.println("* SEARCH: Empty filter, showing all locations")
+        return
+    }
+    
+    // Apply a simple substring filter
+    filter_lower := strings.to_lower(search_text)
+    match_count := 0
+    
+    for location, idx in db.locations {
+        // Guard against null strings
+        name := location.name != "" ? location.name : ""
+        world := location.world != "" ? location.world : ""
+        desc := location.description != "" ? location.description : ""
+        
+        // Simple substring search using to_lower to make it case insensitive
+        name_match := strings.contains(strings.to_lower(name), filter_lower)
+        world_match := strings.contains(strings.to_lower(world), filter_lower) 
+        desc_match := strings.contains(strings.to_lower(desc), filter_lower)
+        
+        // Check coords too
+        coords_str := fmt.tprintf("%d %d", location.x, location.z)
+        coords_match := strings.contains(strings.to_lower(coords_str), filter_lower)
+        
+        // Add location index to filtered list if any match is found
+        if name_match || world_match || desc_match || coords_match {
+            append(&db.filtered_locations, idx)
+            match_count += 1
+        }
+    }
+    
+    fmt.printf("* SEARCH: Found %d matches for filter '%s'\n", match_count, search_text)
+}
+
+// Get the current search text from the buffer
+get_search_text :: proc(state: ^InputState) -> string {
+    return string_from_bytes(state.search_buffer[:])
 }
