@@ -95,9 +95,12 @@ load_font_with_fallback :: proc() -> rl.Font {
 
     local_app_data := os.get_env("LOCALAPPDATA", context.temp_allocator)
     if local_app_data != "" {
-        user_font_path := fmt.tprintf("%s/Microsoft/Windows/Fonts/MinecraftTen-VGORe.ttf", local_app_data)
+        path_buf: [512]u8
+        user_font_path := fmt.bprintf(path_buf[:], "%s/Microsoft/Windows/Fonts/MinecraftTen-VGORe.ttf", local_app_data)
         if os.exists(user_font_path) {
-            font := rl.LoadFont(strings.clone_to_cstring(user_font_path))
+            path_c_buf: [512]u8
+            cstr := get_cstring(user_font_path, path_c_buf[:])
+            font := rl.LoadFont(cstr)
             if font.texture.id != 0 && rl.GetGlyphIndex(font, 'A') != 0 {
                 fmt.println("Loaded Minecraft font from:", user_font_path)
                 return font
@@ -108,7 +111,9 @@ load_font_with_fallback :: proc() -> rl.Font {
 
     for path in font_paths {
         if os.exists(path) {
-            font := rl.LoadFont(strings.clone_to_cstring(path))
+            path_c_buf: [512]u8
+            cstr := get_cstring(path, path_c_buf[:])
+            font := rl.LoadFont(cstr)
             if font.texture.id != 0 && rl.GetGlyphIndex(font, 'A') != 0 {
                 fmt.println("Loaded Minecraft font from:", path)
                 return font
@@ -117,7 +122,8 @@ load_font_with_fallback :: proc() -> rl.Font {
         }
     }
 
-    consolas := rl.LoadFont(strings.clone_to_cstring("C:/Windows/Fonts/consola.ttf"))
+    consolas_buf: [512]u8
+    consolas := rl.LoadFont(get_cstring("C:/Windows/Fonts/consola.ttf", consolas_buf[:]))
     if consolas.texture.id != 0 && rl.GetGlyphIndex(consolas, 'A') != 0 {
         fmt.println("Using Consolas as fallback font")
         return consolas
@@ -272,7 +278,8 @@ get_section_at_point :: proc(layout: ^Layout, point: rl.Vector2) -> ^LayoutSecti
 }
 
 make_input_box :: proc(layout: ^Layout, section: ^LayoutSection, pos: Position, label: string, font: rl.Font, font_size: f32, font_spacing: f32) -> UIElement {
-    label_width := rl.MeasureTextEx(font, strings.clone_to_cstring(label), font_size, font_spacing).x
+    label_c_buf: [256]u8
+    label_width := rl.MeasureTextEx(font, get_cstring(label, label_c_buf[:]), font_size, font_spacing).x
     return UIElement{
         rect = rl.Rectangle{
             pos.x + label_width + layout.margin,

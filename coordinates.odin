@@ -87,5 +87,7 @@ convert_between_dimensions :: proc(x: int, from: Dimension, to: Dimension) -> in
 
 
 coordinates_to_string :: proc(pair: CoordinatePair) -> string {
-    return fmt.tprintf("X: %d, Z: %d (%v)", pair.x, pair.z, pair.dimension)
+    // Use a static buffer to avoid allocations
+    buf: [64]u8
+    return fmt.bprintf(buf[:], "X: %d, Z: %d (%v)", pair.x, pair.z, pair.dimension)
 }

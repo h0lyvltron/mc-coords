@@ -7,6 +7,7 @@ import "core:strconv"
 import "core:os"
 import "core:math"
 import rl "vendor:raylib"
+import "core:time"
 
 AppState :: struct {
     window_width: i32,
@@ -238,15 +239,15 @@ init_app :: proc() -> AppState {
         fmt.eprintln("Failed to load background color")
     }
 
-    // Load title image and initialize all graphics
-    title_img := rl.LoadImage(strings.clone_to_cstring("assets/title.png"))
+    // Load title image
+    title_img := load_image_tracked("assets/title.png")
     if title_img.data == nil {
         fmt.eprintln("! Failed to load title image")
         return state
     }
-    defer rl.UnloadImage(title_img)
+    defer unload_image_tracked(title_img)
 
-    state.title.texture = rl.LoadTextureFromImage(title_img)
+    state.title.texture = load_texture_from_image_tracked(title_img)
     if state.title.texture.id == 0 {
         fmt.eprintln("! Failed to create texture from title image")
         return state
@@ -290,12 +291,12 @@ init_app :: proc() -> AppState {
             return state
         }
     }
-
+    
     // Get shader locations
     for i in 0..<3 {
         state.title.shaders[i].time_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "time")
         state.title.shaders[i].resolution_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "resolution")
-        
+    
         // Get digital noise shader locations for the first shader
         if i == 0 {
             state.title.shaders[i].noise_scale_loc = rl.GetShaderLocation(state.title.shaders[i].shader, "noise_scale")
@@ -371,35 +372,195 @@ init_app :: proc() -> AppState {
         update_layout(&state.layout, state.window_width, state.window_height)
     }
     
+    // Initialize memory tracking
+    init_memory_tracking()
+    
+    // Note: Memory optimization not enabled, but draw_text_efficient is still available
+    
     return state
 }
 
+// Add performance helpers
+IsAppActive :: proc() -> bool {
+    // Check if the app window is focused/active
+    return !rl.IsWindowMinimized() && rl.IsWindowFocused()
+}
+
+// Add optimization flags
+optimization_flags: struct {
+    skip_shader_updates_when_inactive: bool,
+    throttle_shader_updates: bool,
+    update_interval: f32,
+    reuse_string_buffers: bool,
+} = {
+    skip_shader_updates_when_inactive = true,
+    throttle_shader_updates = true,
+    update_interval = 1.0/15.0, // 15 FPS updates when nothing changing
+    reuse_string_buffers = true,
+}
+
+// Use this instead of build_string_proc
+format_texture_info :: proc(buffer: []u8, width, height: i32) -> string {
+    return fmt.bprintf(buffer, "Texture: %dx%d", width, height)
+}
+
+format_debug_info :: proc(buffer: []u8, params: struct {
+    noise_scale: f32,
+    glitch_intensity: f32,
+    scan_line_density: f32,
+    tear_frequency: f32,
+    rgb_split_amount: f32,
+    static_amount: f32,
+    pulse_speed: f32,
+    pulse_intensity: f32,
+    glitch_color: [3]f32,
+}) -> string {
+    return fmt.bprintf(buffer, 
+        "Digital Noise: Scale=%.2f Intensity=%.2f Scan Line Density=%.2f Tear Frequency=%.2f\nRGB Split Amount=%.3f Static Amount=%.2f Pulse Speed=%.2f Pulse Intensity=%.2f",
+        params.noise_scale,
+        params.glitch_intensity,
+        params.scan_line_density,
+        params.tear_frequency,
+        params.rgb_split_amount,
+        params.static_amount,
+        params.pulse_speed,
+        params.pulse_intensity)
+}
+
+format_src_debug :: proc(buffer: []u8, index: i32) -> string {
+    return fmt.bprintf(buffer, "src:%d", index)
+}
+
+format_dst_debug :: proc(buffer: []u8, index: int) -> string {
+    return fmt.bprintf(buffer, "dst:%d", index)
+}
+
+// Initialize memory optimization buffer pools
+init_memory_optimization :: proc() {
+    fmt.println("* Initializing memory optimization buffers")
+    // No actual initialization needed as static buffers are already allocated
+}
+
+// Initialize memory management and tracking
+setup_memory_management :: proc() {
+    // Initialize our memory tracking system
+    init_memory_tracking()
+    fmt.println("* Memory tracking system initialized")
+}
+
+// Helper to convert C strings without memory leaks
+to_cstring :: proc(str: string) -> cstring {
+    // Convert string to cstring without allocation
+    cstr: cstring = nil
+    if len(str) > 0 {
+        cstr = cstring(raw_data(str))
+    }
+    return cstr
+}
+
+// Use reusable buffers for strings to avoid memory leaks
+str_buffer: [1024]u8
+
+// Helper to convert string to cstring with buffer
+string_to_cstring :: proc(str: string, buffer: []u8) -> cstring {
+    if len(str) == 0 {
+        buffer[0] = 0
+        return cstring(&buffer[0])
+    }
+    
+    copy_size := min(len(str), len(buffer)-1)
+    copy(buffer[:copy_size], str[:copy_size])
+    buffer[copy_size] = 0
+    return cstring(&buffer[0])
+}
+
+destroy_app :: proc(state: ^AppState) {
+    // Cleanup resources
+    rl.UnloadFont(state.font)
+    unload_texture_tracked(state.title.texture)
+    delete(state.input.key_states)
+    
+    // Clean up shaders
+    for i in 0..<len(state.title.shaders) {
+        if state.title.shaders[i].shader.id != 0 {
+            rl.UnloadShader(state.title.shaders[i].shader)
+        }
+    }
+    
+    // Clean up locations array
+    delete(state.locations.locations)
+}
+
+// Add a helper to inspect memory allocations at runtime
+inspect_active_allocations :: proc() {
+    fmt.println("\n*** DETAILED MEMORY INSPECTION ***")
+    fmt.println("Active allocations:", len(tracker.allocation_map))
+    
+    // Group allocations by location (file:line)
+    location_counts: map[string]int
+    location_bytes: map[string]int
+    defer delete(location_counts)
+    defer delete(location_bytes)
+    
+    for _, entry in tracker.allocation_map {
+        location := fmt.tprintf("%v", entry.location)
+        location_counts[location] += 1
+        location_bytes[location] += entry.size
+    }
+    
+    // Sort locations by allocation count (simple bubble sort)
+    locations := make([]string, len(location_counts))
+    i := 0
+    for location in location_counts {
+        locations[i] = location
+        i += 1
+    }
+    
+    for i := 0; i < len(locations); i += 1 {
+        for j := i + 1; j < len(locations); j += 1 {
+            if location_counts[locations[i]] < location_counts[locations[j]] {
+                locations[i], locations[j] = locations[j], locations[i]
+            }
+        }
+    }
+    
+    // Print top allocation sources
+    fmt.println("\nTop allocation sources:")
+    fmt.println("Count | Bytes  | Location")
+    fmt.println("------|--------|----------")
+    
+    show_count := min(10, len(locations))
+    for i := 0; i < show_count; i += 1 {
+        location := locations[i]
+        fmt.printf("%5d | %6d | %s\n", location_counts[location], location_bytes[location], location)
+    }
+    
+    delete(locations)
+}
+
 main :: proc() {
+    // Initialize memory management system first
+    setup_memory_management()
+    defer shutdown_memory_tracking()
+    
+    // Set random seed
+    rl.SetRandomSeed(u32(time.now()._nsec))
+    
+    // Enable Raylib logging
+    rl.SetTraceLogLevel(.WARNING)
+    
     // Enable window resizing and other window flags
     rl.SetConfigFlags({.WINDOW_RESIZABLE, .WINDOW_HIGHDPI})
-    rl.InitWindow(WINDOW_DEFAULT_FLAGS.width, WINDOW_DEFAULT_FLAGS.height, strings.clone_to_cstring(WINDOW_DEFAULT_FLAGS.title))
+    rl.InitWindow(WINDOW_DEFAULT_FLAGS.width, WINDOW_DEFAULT_FLAGS.height, safe_cstring(WINDOW_DEFAULT_FLAGS.title))
     defer rl.CloseWindow()
-
+    
+    // Set target FPS
     rl.SetTargetFPS(60)
-
+    
     state := init_app()
     window := init_window_state()
     defer {
-        rl.UnloadFont(state.font)
-        rl.UnloadTexture(state.title.texture)
-        delete(state.input.key_states)
-        
-        // Clean up shaders
-        for i in 0..<len(state.title.shaders) {
-            if state.title.shaders[i].shader.id != 0 {
-                rl.UnloadShader(state.title.shaders[i].shader)
-            }
-        }
-        
-        // Remove background cleanup since we're using a simple color now
-        
-        // Clean up locations array
-        delete(state.locations.locations)
+        destroy_app(&state)
     }
     
     // Initialize layout sections
@@ -459,10 +620,25 @@ main :: proc() {
 
     // Create a variable to control the main game loop
     should_close := false
+    
+    // Use a single buffer for debug text strings instead of creating a new one each frame
+    debug_buffer: [1024]u8
+    coord_buffer: [64]u8
+    feedback_buffer: [32]u8
+    
+    // Optimization variables
+    shader_update_timer: f32 = 0.0
+    
+    // Reuse common objects for efficiency
+    str_cache: map[string]cstring
+    defer delete(str_cache)
 
     for !should_close {
         // Update window state and handle resizing
         update_window_state(&window, &state)
+        
+        // Update memory tracking (for debugging)
+        update_memory_tracking()
         
         // Check for close button (but not escape key)
         // This will still allow the window's X button to work
@@ -526,8 +702,10 @@ main :: proc() {
                 }
                 
                 if !handled_click && state.clipboard.hovered {
-                    coord_str := fmt.tprintf("%d, %d", state.coordinates.converted.x, state.coordinates.converted.z)
-                    rl.SetClipboardText(strings.clone_to_cstring(coord_str))
+                    // Use a reusable buffer instead of fmt.tprintf and strings.clone_to_cstring
+                    coord_buf: [64]u8
+                    coord_str := fmt.bprintf(coord_buf[:], "%d, %d", state.coordinates.converted.x, state.coordinates.converted.z)
+                    set_clipboard_text_efficient(coord_str)
                     state.clipboard.last_copied = 0.5 // Start feedback animation
                     handled_click = true
                 } else if !handled_click && state.input.active_input != .None {
@@ -544,6 +722,21 @@ main :: proc() {
         if rl.IsKeyPressed(.F3) {
             state.debug_view = !state.debug_view
             fmt.println("Debug view:", state.debug_view ? "enabled" : "disabled")
+        }
+        
+        // Memory diagnostics with F10 (basic report) and F11 (memory diagnostic)
+        if rl.IsKeyPressed(.F10) {
+            print_memory_report()
+        }
+        
+        if rl.IsKeyPressed(.F11) {
+            diagnose_memory()
+        }
+        
+        if rl.IsKeyPressed(.F12) {
+            // Toggle detailed tracking
+            enable_detailed_tracking = !enable_detailed_tracking
+            fmt.printf("* Detailed memory tracking: %s\n", enable_detailed_tracking ? "enabled" : "disabled")
         }
 
         if update_input_state(&state.input) {
@@ -642,60 +835,46 @@ main :: proc() {
         // Replace background shader rendering with simple color fill
         rl.ClearBackground(state.background.color)
         
-        time := f32(rl.GetTime())
-        // Remove these lines:
-        // rl.SetShaderValue(state.background.shader, state.background.time_loc, &time, .FLOAT)
-        // rl.BeginShaderMode(state.background.shader)
-        // rl.DrawTexturePro(
-        //     state.background.texture,
-        //     state.background.source_rect,
-        //     state.background.dest_rect,
-        //     rl.Vector2{0, 0},
-        //     0,
-        //     rl.WHITE,
-        // )
-        // rl.EndShaderMode()
-        
-        // Draw title using the image atlas
-        // Reuse the variables from above instead of redeclaring
-        // title_scale, base_width, base_height, total_width, and start_x are already defined
-        
-        if state.debug_view {
-            // Draw total width debug rectangle
-            total_bounds := rl.Rectangle{
-                x = start_x,
-                y = 15,
-                width = total_width,
-                height = base_height + 10,
+        // Update shader time only when needed to reduce memory consumption
+        if optimization_flags.throttle_shader_updates {
+            shader_update_timer -= rl.GetFrameTime()
+            
+            // Only update shaders on interval or when interactivity is happening
+            if shader_update_timer <= 0 || 
+               state.title.hover_state.index >= 0 || // Title being hovered
+               rl.IsKeyDown(.LEFT_CONTROL) {        // Shader params being modified
+                
+                // Reset timer
+                shader_update_timer = optimization_flags.update_interval
+                
+                // Update shader time
+                title_time := f32(rl.GetTime())
+                rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].time_loc, &title_time, .FLOAT)
+                rl.SetShaderValue(state.title.shaders[1].shader, state.title.shaders[1].time_loc, &title_time, .FLOAT)
+                rl.SetShaderValue(state.title.shaders[2].shader, state.title.shaders[2].time_loc, &title_time, .FLOAT)
+                
+                // Only update shader uniforms when actually changing parameters
+                if rl.IsKeyDown(.LEFT_CONTROL) {
+                    shader := &state.title.shaders[0]  // Digital noise shader
+                    rl.SetShaderValue(shader.shader, shader.noise_scale_loc, &state.title.digital_noise_params.noise_scale, .FLOAT)
+                    rl.SetShaderValue(shader.shader, shader.glitch_intensity_loc, &state.title.digital_noise_params.glitch_intensity, .FLOAT)
+                    rl.SetShaderValue(shader.shader, shader.scan_line_density_loc, &state.title.digital_noise_params.scan_line_density, .FLOAT)
+                    rl.SetShaderValue(shader.shader, shader.tear_frequency_loc, &state.title.digital_noise_params.tear_frequency, .FLOAT)
+                    rl.SetShaderValue(shader.shader, shader.rgb_split_amount_loc, &state.title.digital_noise_params.rgb_split_amount, .FLOAT)
+                    rl.SetShaderValue(shader.shader, shader.static_amount_loc, &state.title.digital_noise_params.static_amount, .FLOAT)
+                    rl.SetShaderValue(shader.shader, shader.pulse_speed_loc, &state.title.digital_noise_params.pulse_speed, .FLOAT)
+                    rl.SetShaderValue(shader.shader, shader.pulse_intensity_loc, &state.title.digital_noise_params.pulse_intensity, .FLOAT)
+                    rl.SetShaderValue(shader.shader, shader.glitch_color_loc, &state.title.digital_noise_params.glitch_color[0], .VEC3)
+                }
             }
-            rl.DrawRectangleLinesEx(total_bounds, 2, rl.ColorAlpha(rl.PURPLE, 0.3))
-            
-            // Draw center line for reference
-            center_x := f32(state.window_width) / 2
-            rl.DrawLine(i32(center_x), 0, i32(center_x), 60, rl.ColorAlpha(rl.RED, 0.5))
-            
-            // Draw source texture debug info
-            debug_text := fmt.tprintf("Texture: %dx%d", state.title.texture.width, state.title.texture.height)
-            rl.DrawText(strings.clone_to_cstring(debug_text), 10, 60, 10, rl.ColorAlpha(rl.WHITE, 0.5))
+        } else {
+            // Original behavior - update every frame
+            title_time := f32(rl.GetTime())
+            rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].time_loc, &title_time, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[1].shader, state.title.shaders[1].time_loc, &title_time, .FLOAT)
+            rl.SetShaderValue(state.title.shaders[2].shader, state.title.shaders[2].time_loc, &title_time, .FLOAT)
         }
-        
-        // Update shader time
-        title_time := f32(rl.GetTime())
-        rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].time_loc, &title_time, .FLOAT)
-        rl.SetShaderValue(state.title.shaders[1].shader, state.title.shaders[1].time_loc, &title_time, .FLOAT)
-        rl.SetShaderValue(state.title.shaders[2].shader, state.title.shaders[2].time_loc, &title_time, .FLOAT)
-        
-        shader := &state.title.shaders[0]  // Digital noise shader
-        rl.SetShaderValue(shader.shader, shader.noise_scale_loc, &state.title.digital_noise_params.noise_scale, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.glitch_intensity_loc, &state.title.digital_noise_params.glitch_intensity, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.scan_line_density_loc, &state.title.digital_noise_params.scan_line_density, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.tear_frequency_loc, &state.title.digital_noise_params.tear_frequency, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.rgb_split_amount_loc, &state.title.digital_noise_params.rgb_split_amount, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.static_amount_loc, &state.title.digital_noise_params.static_amount, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.pulse_speed_loc, &state.title.digital_noise_params.pulse_speed, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.pulse_intensity_loc, &state.title.digital_noise_params.pulse_intensity, .FLOAT)
-        rl.SetShaderValue(shader.shader, shader.glitch_color_loc, &state.title.digital_noise_params.glitch_color[0], .VEC3)
-        
+
         // Update parameters on keyboard input
         if rl.IsKeyDown(.LEFT_CONTROL) && !rl.IsKeyDown(.LEFT_SHIFT) {
             if rl.IsKeyDown(.Q) {
@@ -785,18 +964,33 @@ main :: proc() {
             rl.SetShaderValue(state.title.shaders[0].shader, state.title.shaders[0].glitch_color_loc, &state.title.digital_noise_params.glitch_color[0], .VEC3)
             
             if state.debug_view {
-                debug_text := fmt.tprintf(
-                    "Digital Noise: Scale=%.2f Intensity=%.2f Scan Line Density=%.2f Tear Frequency=%.2f\nRGB Split Amount=%.3f Static Amount=%.2f Pulse Speed=%.2f Pulse Intensity=%.2f",
-                    state.title.digital_noise_params.noise_scale,
-                    state.title.digital_noise_params.glitch_intensity,
-                    state.title.digital_noise_params.scan_line_density,
-                    state.title.digital_noise_params.tear_frequency,
-                    state.title.digital_noise_params.rgb_split_amount,
-                    state.title.digital_noise_params.static_amount,
-                    state.title.digital_noise_params.pulse_speed,
-                    state.title.digital_noise_params.pulse_intensity,
-                )
-                rl.DrawText(strings.clone_to_cstring(debug_text), 10, 40, 10, rl.ColorAlpha(rl.WHITE, 0.5))
+                if optimization_flags.reuse_string_buffers {
+                    debug_str := format_debug_info(debug_buffer[:], state.title.digital_noise_params)
+                    rl.DrawText(cstring(&debug_buffer[0]), 10, 40, 10, rl.ColorAlpha(rl.WHITE, 0.5))
+                } else {
+                    // Use a reusable buffer to avoid allocation
+                    debug_buf: [1024]u8 
+                    debug_text := fmt.bprintf(debug_buf[:],
+                        "Digital Noise: Scale=%.2f Intensity=%.2f Scan Line Density=%.2f Tear Frequency=%.2f\nRGB Split Amount=%.3f Static Amount=%.2f Pulse Speed=%.2f Pulse Intensity=%.2f",
+                        state.title.digital_noise_params.noise_scale,
+                        state.title.digital_noise_params.glitch_intensity,
+                        state.title.digital_noise_params.scan_line_density,
+                        state.title.digital_noise_params.tear_frequency,
+                        state.title.digital_noise_params.rgb_split_amount,
+                        state.title.digital_noise_params.static_amount,
+                        state.title.digital_noise_params.pulse_speed,
+                        state.title.digital_noise_params.pulse_intensity,
+                    )
+                    
+                    // Convert to cstring without allocation
+                    i := 0
+                    for i < len(debug_text) {
+                        debug_buf[i] = debug_text[i]
+                        i += 1
+                    }
+                    debug_buf[i] = 0
+                    rl.DrawText(cstring(&debug_buf[0]), 10, 40, 10, rl.ColorAlpha(rl.WHITE, 0.5))
+                }
             }
         }
         
@@ -850,13 +1044,20 @@ main :: proc() {
                 // Hover detection rectangle in blue
                 rl.DrawRectangleLinesEx(hover_rect, 1, rl.ColorAlpha(rl.BLUE, debug_alpha))
                 
-                // Draw source coordinates
-                src_debug := fmt.tprintf("src:%d", letter_index)
-                rl.DrawText(strings.clone_to_cstring(src_debug), i32(hover_rect.x), 70, 10, rl.ColorAlpha(rl.RED, 0.5))
-                
-                // Draw destination coordinates
-                dest_debug := fmt.tprintf("dst:%d", i)
-                rl.DrawText(strings.clone_to_cstring(dest_debug), i32(hover_rect.x), 80, 10, rl.ColorAlpha(rl.BLUE, 0.5))
+                if optimization_flags.reuse_string_buffers {
+                    src_str := format_src_debug(debug_buffer[:], letter_index)
+                    rl.DrawText(cstring(&debug_buffer[0]), i32(hover_rect.x), 70, 10, rl.ColorAlpha(rl.RED, 0.5))
+                    
+                    dst_str := format_dst_debug(debug_buffer[:], i)
+                    rl.DrawText(cstring(&debug_buffer[0]), i32(hover_rect.x), 80, 10, rl.ColorAlpha(rl.BLUE, 0.5))
+                } else {
+                    // Original code with fmt.tprintf and strings.clone_to_cstring
+                    src_debug := fmt.tprintf("src:%d", letter_index)
+                    rl.DrawText(strings.clone_to_cstring(src_debug), i32(hover_rect.x), 70, 10, rl.ColorAlpha(rl.RED, 0.5))
+                    
+                    dest_debug := fmt.tprintf("dst:%d", i)
+                    rl.DrawText(strings.clone_to_cstring(dest_debug), i32(hover_rect.x), 80, 10, rl.ColorAlpha(rl.BLUE, 0.5))
+                }
             }
             
             // Draw the actual sprite with multiple shaders
@@ -908,6 +1109,27 @@ main :: proc() {
         if state.debug_view {
             header_bounds := rl.Rectangle{20, 95, 200, state.font_size + 4}
             rl.DrawRectangleLinesEx(header_bounds, 1, rl.ColorAlpha(rl.YELLOW, 0.3))
+            
+            // Display detailed memory usage information using reusable buffers
+            allocs, current, peak := memory_usage_detailed()
+            
+            // Use reusable buffers instead of creating new strings
+            mem_buf1: [64]u8
+            mem_buf2: [64]u8
+            
+            // Format strings into buffers
+            fmt.bprintf(mem_buf1[:], "Memory: %d allocations", allocs)
+            fmt.bprintf(mem_buf2[:], "Current: %.2f MB / Peak: %.2f MB", 
+                               f32(current) / (1024.0 * 1024.0), 
+                               f32(peak) / (1024.0 * 1024.0))
+            
+            // Convert to cstrings without allocation
+            mem_cstr1 := cstring(&mem_buf1[0])
+            mem_cstr2 := cstring(&mem_buf2[0])
+            
+            // Draw text directly with the cstrings
+            rl.DrawText(mem_cstr1, 320, 15, 14, rl.ColorAlpha(rl.GREEN, 0.8))
+            rl.DrawText(mem_cstr2, 320, 35, 14, rl.ColorAlpha(rl.GREEN, 0.8))
         }
         
         draw_outlined_text(state.font, "X:", rl.Vector2{x_input.label_pos.x, x_input.label_pos.y}, state.font_size, 1)
@@ -1228,12 +1450,12 @@ main :: proc() {
             // Title debug info
             title_text := fmt.bprintf(debug_text[:], "Title Texture: %dx%d", 
                 state.title.texture.width, state.title.texture.height)
-            rl.DrawText(strings.clone_to_cstring(title_text), 10, 10, 20, rl.RED)
+            draw_text_efficient(title_text, 10, 10, 20, rl.RED)
             
             // Input section debug info
             input_text := fmt.bprintf(debug_text[:], "Input: %s", 
                 state.input.active_input == .X ? "X" : state.input.active_input == .Z ? "Z" : "None")
-            rl.DrawText(strings.clone_to_cstring(input_text), 10, 40, 20, rl.RED)
+            draw_text_efficient(input_text, 10, 40, 20, rl.RED)
             
             // Wave parameters debug info
             wave_text := fmt.bprintf(debug_text[:], "Wave: Scale=%.2f Intensity=%.2f Scan Line Density=%.2f Tear Frequency=%.2f", 
@@ -1241,7 +1463,7 @@ main :: proc() {
                 state.title.digital_noise_params.glitch_intensity,
                 state.title.digital_noise_params.scan_line_density,
                 state.title.digital_noise_params.tear_frequency)
-            rl.DrawText(strings.clone_to_cstring(wave_text), 10, 70, 20, rl.RED)
+            draw_text_efficient(wave_text, 10, 70, 20, rl.RED)
         }
 
         // Update clipboard hover state
@@ -1334,20 +1556,26 @@ main :: proc() {
             }
 
             // Draw location name
+            name_c_buf: [256]u8
             name_pos := rl.Vector2{content_x + 5, item_y + 5}
-            draw_outlined_text(state.font, strings.clone_to_cstring(location.name), name_pos, state.font_size, 1)
+            draw_outlined_text(state.font, get_cstring(location.name, name_c_buf[:]), name_pos, state.font_size, 1)
 
             // Draw coordinates and world
-            coords := fmt.tprintf("%d, %d (%v) - %s", location.x, location.z, location.dimension, location.world)
+            coords_buf: [128]u8
+            coords := fmt.bprintf(coords_buf[:], "%d, %d (%v) - %s", location.x, location.z, location.dimension, location.world)
             coords_pos := rl.Vector2{content_x + 5, item_y + 25}
-            draw_outlined_text(state.font, strings.clone_to_cstring(coords), coords_pos, state.font_size * 0.8, 1)
+            
+            // Use memory-efficient text drawing
+            coords_c_buf: [128]u8
+            draw_outlined_text(state.font, get_cstring(coords, coords_c_buf[:]), coords_pos, state.font_size * 0.8, 1)
 
             // Draw description (if any)
             if len(location.description) > 0 {
+                desc_c_buf: [512]u8
                 desc_pos := rl.Vector2{content_x + 5, item_y + 45}
                 draw_outlined_text(
                     state.font,
-                    strings.clone_to_cstring(location.description),
+                    get_cstring(location.description, desc_c_buf[:]),
                     desc_pos,
                     state.font_size * 0.8,
                     1,
@@ -1383,10 +1611,12 @@ main :: proc() {
                 state.input.location_dialog_buffers.z[len(z_str)] = 0
                 
                 // Pre-fill with default name
-                default_name := fmt.tprintf("Location %d", len(state.locations.locations) + 1)
-                for i := 0; i < min(len(default_name), len(state.input.location_dialog_buffers.name)-1); i += 1 {
-                    state.input.location_dialog_buffers.name[i] = default_name[i]
+                name_buf: [64]u8
+                name_str := fmt.bprintf(name_buf[:], "Location %d", len(state.locations.locations) + 1)
+                for i := 0; i < min(len(name_str), len(state.input.location_dialog_buffers.name)-1); i += 1 {
+                    state.input.location_dialog_buffers.name[i] = name_str[i]
                 }
+                state.input.location_dialog_buffers.name[min(len(name_str), len(state.input.location_dialog_buffers.name)-1)] = 0
                 
                 // Initialize the dimension to match current source dimension
                 state.input.location_dialog_dimension = state.coordinates.source_dimension
@@ -1687,10 +1917,13 @@ main :: proc() {
             
             // Center the Cancel text
             cancel_text := "CANCEL"
-            cancel_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(cancel_text), state.font_size, 1)
+            cancel_c_buf: [32]u8
+            cancel_text_size := rl.MeasureTextEx(state.font, get_cstring(cancel_text, cancel_c_buf[:]), state.font_size, 1)
+            
+            cancel_draw_buf: [32]u8
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(cancel_text),
+                get_cstring(cancel_text, cancel_draw_buf[:]),
                 rl.Vector2{
                     input_x + (button_width - cancel_text_size.x)/2,
                     button_y + label_offset + (button_height - cancel_text_size.y)/2
@@ -1705,10 +1938,13 @@ main :: proc() {
             
             // Center the Save text
             save_text := "SAVE"
-            save_text_size := rl.MeasureTextEx(state.font, strings.clone_to_cstring(save_text), state.font_size, 1)
+            save_c_buf: [32]u8
+            save_text_size := rl.MeasureTextEx(state.font, get_cstring(save_text, save_c_buf[:]), state.font_size, 1)
+            
+            save_draw_buf: [32]u8
             draw_outlined_text(
                 state.font,
-                strings.clone_to_cstring(save_text),
+                get_cstring(save_text, save_draw_buf[:]),
                 rl.Vector2{
                     z_input_x + (button_width - save_text_size.x)/2,
                     button_y + label_offset + (button_height - save_text_size.y)/2
@@ -1829,7 +2065,8 @@ save_location_from_dialog :: proc(state: ^AppState) {
         
         if len(name_str) == 0 {
             // Set default name if empty
-            name_str = fmt.tprintf("Location %d", len(state.locations.locations) + 1)
+            name_buf: [64]u8
+            name_str = fmt.bprintf(name_buf[:], "Location %d", len(state.locations.locations) + 1)
             for i := 0; i < min(len(name_str), len(state.input.location_dialog_buffers.name)-1); i += 1 {
                 state.input.location_dialog_buffers.name[i] = name_str[i]
             }
@@ -1865,4 +2102,28 @@ save_location_from_dialog :: proc(state: ^AppState) {
         state.input.active_input = .None
         state.state_tracking.has_unsaved_changes = true
     }
+}
+
+// Simplified image loading without tracking
+load_image_tracked :: proc(path: string) -> rl.Image {
+    buf: [1024]u8
+    cstr := get_cstring(path, buf[:])
+    return rl.LoadImage(cstr)
+}
+
+// Simplified image unloading without tracking
+unload_image_tracked :: proc(image: rl.Image) {
+    rl.UnloadImage(image)
+}
+
+// Simplified texture loading from image without tracking
+load_texture_from_image_tracked :: proc(image: rl.Image) -> rl.Texture2D {
+    return rl.LoadTextureFromImage(image)
+}
+
+// Simplified memory usage reporting function
+memory_usage_detailed :: proc() -> (count: int, current: int, peak: int) {
+    return int(tracker.total_allocation_count), 
+           int(tracker.current_memory_allocated), 
+           int(tracker.peak_memory_allocated)
 }

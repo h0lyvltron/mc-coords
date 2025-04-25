@@ -28,23 +28,41 @@ init_location_database :: proc() -> LocationDatabase {
 }
 
 add_location :: proc(db: ^LocationDatabase, name: string, world: string, x: i32, z: i32, dimension: Dimension, description: string) {
+    name_clone := strings.clone(name)
+    track_allocation(.Locations, len(name_clone))
+    
+    world_clone := strings.clone(world)
+    track_allocation(.Locations, len(world_clone))
+    
+    desc_clone := strings.clone(description)
+    track_allocation(.Locations, len(desc_clone))
+    
     location := Location {
-        name = strings.clone(name),
-        world = strings.clone(world),
+        name = name_clone,
+        world = world_clone,
         x = x,
         z = z,
         dimension = dimension,
-        description = strings.clone(description),
+        description = desc_clone,
     }
     append(&db.locations, location)
+    track_allocation(.Locations, size_of(Location))
 }
 
 delete_location :: proc(db: ^LocationDatabase, index: int) {
     if index >= 0 && index < len(db.locations) {
+        // Untrack memory before deleting
+        untrack_allocation(.Locations, len(db.locations[index].name))
+        untrack_allocation(.Locations, len(db.locations[index].world))
+        untrack_allocation(.Locations, len(db.locations[index].description))
+        
         delete(db.locations[index].name)
         delete(db.locations[index].world)
         delete(db.locations[index].description)
+        
+        untrack_allocation(.Locations, size_of(Location))
         unordered_remove(&db.locations, index)
+        
         if db.selected_index >= len(db.locations) {
             db.selected_index = len(db.locations) - 1
         }

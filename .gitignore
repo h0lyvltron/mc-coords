@@ -29,3 +29,5 @@ sprite-prompts.txt
 ols.json
 mc-coords.code-workspace
 state.json
+memory_fixes.odin
+memory_log.txt

@@ -128,10 +128,19 @@ load_state :: proc(state: ^AppState) -> bool {
 
     // Copy locations
     for location in serial_state.locations {
+        name_clone := strings.clone(location.name)
+        track_allocation(.Strings, len(name_clone))
+        
+        world_clone := strings.clone(location.world)
+        track_allocation(.Strings, len(world_clone))
+        
+        desc_clone := strings.clone(location.description)
+        track_allocation(.Strings, len(desc_clone))
+        
         add_location := Location{
-            name = strings.clone(location.name),
-            world = strings.clone(location.world),
-            description = strings.clone(location.description),
+            name = name_clone,
+            world = world_clone,
+            description = desc_clone,
             x = location.x,
             z = location.z,
             dimension = location.dimension,
@@ -183,9 +192,11 @@ load_state :: proc(state: ^AppState) -> bool {
         state.input.coord_buffers[1][i] = 0
     }
     
-    // Convert integers back to strings
-    x_str := fmt.tprintf("%d", serial_state.coordinates.input_x)
-    z_str := fmt.tprintf("%d", serial_state.coordinates.input_z)
+    // Convert integers back to strings using reusable buffers instead of fmt.tprintf
+    x_buf: [32]u8
+    z_buf: [32]u8
+    x_str := fmt.bprintf(x_buf[:], "%d", serial_state.coordinates.input_x)
+    z_str := fmt.bprintf(z_buf[:], "%d", serial_state.coordinates.input_z)
     
     fmt.println("* Debug: Loading coordinates:", x_str, z_str)
     
